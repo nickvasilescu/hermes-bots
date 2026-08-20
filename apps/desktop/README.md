@@ -11,6 +11,25 @@
 
 **The native desktop app for [Hermes Agent](../../README.md) — the self-improving AI agent from [Nous Research](https://nousresearch.com).** Same agent, same skills, same memory as the CLI and gateway, in a polished native window — chat with streaming tool output, side-by-side previews, a file browser, voice, and settings, no terminal required. Available for **macOS, Windows, and Linux**.
 
+## Korgo Linux SSH-only package
+
+The compile-time `bot-ssh-only` SKU is operated as a separate, Nix-built and
+contained client. It connects only to an existing Hermes gateway on Mini over
+strict, pre-seeded SSH. It must not be launched from source with credentials and
+has no local Hermes bootstrap, provider setup, Orgo, or Composio path.
+
+Mini owns Hermes configuration, credentials, profiles, cron, messaging, MCPs,
+and WebCTX. The desktop owns only connection/UI state; closing it must not stop
+Mini services. Build, host-key pre-seeding, dummy containment proof, G4
+proxy/waiver decision, G6 approval, rollback, and evidence requirements are in
+[`docs/korgo-linux-ssh-only.md`](../../docs/korgo-linux-ssh-only.md). The
+security assumptions and residual renderer-token decision are in
+[`docs/security/korgo-linux-ssh-only-threat-model.md`](../../docs/security/korgo-linux-ssh-only-threat-model.md).
+
+Do not use `dev:bot`, `dev:mock`, `--no-sandbox`, CDP, SSH agents/forwarding,
+TOFU, broad home/runtime mounts, or broad egress as a substitute for that
+package. Real SSH inputs remain forbidden until the recorded G4 decision.
+
 <table>
 <tr><td><b>Chat with the full agent</b></td><td>Streaming responses, live tool activity, structured tool summaries, and the same conversation history as every other Hermes surface.</td></tr>
 <tr><td><b>Side-by-side previews</b></td><td>Render web pages, files, and tool outputs in a right-hand pane while you keep chatting.</td></tr>

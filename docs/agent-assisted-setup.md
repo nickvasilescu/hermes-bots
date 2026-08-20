@@ -2,6 +2,13 @@
 
 Korgo Bot can be used directly from this repository without a packaged or notarized macOS application.
 
+> **Linux SSH-only is a different SKU.** Do not use this source/dev setup with
+> a real identity, gateway credential, or Mini connection. Linux operators must
+> follow the packaged, contained
+> [`Korgo Linux SSH-only operations`](./korgo-linux-ssh-only.md) runbook. That
+> path has no local setup/bootstrap fallback and does not ask for provider,
+> Orgo, Composio, or Tailscale credentials.
+
 ## Give this prompt to your coding agent
 
 Replace `<workspace>` with the directory where you want the repository:
@@ -46,6 +53,10 @@ It does not:
 - change the generic Hermes installation.
 
 Cloud resources and credentials are configured only after the app opens and the user explicitly follows the first-run guide.
+
+That statement applies to the generic/source Bot flow documented here. It does
+not authorize credential entry in the Linux SSH-only SKU; Mini owns Hermes
+configuration, credentials, profiles, cron, messaging, MCPs, and WebCTX.
 
 ## Updating a source checkout
 
