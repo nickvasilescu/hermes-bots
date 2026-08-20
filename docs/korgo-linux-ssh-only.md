@@ -34,8 +34,9 @@ Record these non-secret inputs before building:
 - existing unprivileged NixOS user, group, and numeric UID;
 - exact Wayland socket basename;
 - stable numeric Mini Tailscale address and SSH port;
-- after G4 only: dedicated identity path, verified known-hosts path, its file
-  SHA256, and out-of-band verified `SHA256:...` host-key fingerprint; and
+- after G4 only: dedicated identity path, verified known-hosts path containing
+  exactly one key for the Mini address/port, its file SHA256, and that exact
+  key's out-of-band verified `SHA256:...` fingerprint; and
 - staged Hermes home/profile, expected Hermes `0.20.4`, commit
   `c820a5d38321a8d870e5b1ed0d89f8b933dd48e8`, and schema `26`.
 
@@ -175,13 +176,18 @@ ssh-keygen -lf candidate_known_hosts -E sha256
 sha256sum candidate_known_hosts
 ```
 
-Compare the `SHA256:...` fingerprint out-of-band. On any mismatch, stop and
-discard the candidate; never accept on first connection or overwrite an
-existing record in-app. After G4 permits real inputs, install the exact file as
-owner/root readable only (`0400` or `0600`) and record its content SHA256. The
-module verifies the file hash, exact host/port entry, and expected fingerprint
-before Electron starts. Create a dedicated key with no reuse and no agent or
-forwarding; keep it owner-only.
+`ssh-keyscan` may return several key algorithms. Select exactly one Mini
+address/port line whose `SHA256:...` fingerprint you verified out-of-band, and
+discard the other candidate lines. Keep the literal numeric host/port field;
+markers, aliases, wildcards, and hashed hostnames are rejected by preflight. On
+any mismatch, stop and discard the candidate; never accept on first connection
+or overwrite an existing record in-app. After G4 permits real inputs, install
+that one-line file as owner/root readable only (`0400` or `0600`) and record its
+content SHA256. The module verifies the file hash, requires exactly one key for
+the exact Mini host/port, and computes the fingerprint from that matching key
+before Electron starts. A verified key elsewhere in the file cannot authorize
+a different Mini key. Create a dedicated identity with no reuse and no agent
+or forwarding; keep it owner-only.
 
 A reviewed host-secret path under `/run` or `/var` is required. After the G4
 decision, the human/operator may create the dedicated key and install the

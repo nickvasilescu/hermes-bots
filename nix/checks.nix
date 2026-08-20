@@ -93,6 +93,58 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           echo "ok" > $out/result
         '';
       } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        # Exercise the host-key binding independently of the system service.
+        # The manifest hash is intentionally valid for every fixture so these
+        # failures prove lookup/fingerprint binding rather than hash rejection.
+        korgo-known-hosts-binding =
+          let
+            lookup = "100.100.100.100";
+            approvedFingerprint = "SHA256:qv37AuNiM1Nh267LxL0x5hJ4dHXNggObrAvOEg0H/uw";
+            approvedKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOU7qOkQkexPVbxoq5L+6KcX+afntM/lyWnY4BudQuxC korgo-test-approved";
+            decoyKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEnND/lw+zOudJSNvhnQ673MsBTXXwJQY46jwUlc7VDP korgo-test-decoy";
+
+            approvedContent = "${lookup} ${approvedKey}\n";
+            decoyContent = ''
+              ${lookup} ${decoyKey}
+              100.100.100.101 ${approvedKey}
+            '';
+            multipleContent = ''
+              ${lookup} ${approvedKey}
+              ${lookup} ${decoyKey}
+            '';
+
+            mkFixture = name: content: pkgs.writeText "korgo-known-hosts-${name}" content;
+            mkVerifier = name: content:
+              import ./korgo-known-hosts-preflight.nix { inherit lib pkgs; } {
+                knownHostsFile = mkFixture name content;
+                knownHostsSha256 = builtins.hashString "sha256" content;
+                inherit lookup;
+                hostKeyFingerprint = approvedFingerprint;
+              };
+
+            approvedVerifier = mkVerifier "approved" approvedContent;
+            decoyVerifier = mkVerifier "decoy" decoyContent;
+            multipleVerifier = mkVerifier "multiple" multipleContent;
+          in
+          pkgs.runCommand "korgo-known-hosts-binding" { } ''
+            set -euo pipefail
+
+            ${approvedVerifier}
+
+            if ${decoyVerifier}; then
+              echo "decoy Mini key plus approved key for another host was accepted" >&2
+              exit 1
+            fi
+
+            if ${multipleVerifier}; then
+              echo "multiple Mini keys were accepted under one fingerprint" >&2
+              exit 1
+            fi
+
+            mkdir -p $out
+            printf 'ok\n' > $out/result
+          '';
+
         # Static policy proof plus the executable dummy probe. The live G3
         # matrix still has to run this probe under the installed system unit;
         # a Nix build sandbox cannot prove the host's cgroup-BPF enforcement.
@@ -102,6 +154,7 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           probe=${../packaging/korgo-ssh-client/korgo-ssh-client-containment-probe}
           unit=${../packaging/korgo-ssh-client/korgo-ssh-client.service}
           package_nix=${./korgo-ssh-client.nix}
+          module_nix=${./korgo-ssh-client-module.nix}
 
           grep -F -- '--clearenv' "$launcher"
           grep -F -- 'must run inside the korgo-ssh-client system service' "$launcher"
@@ -125,6 +178,7 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           grep -F 'node-v''${electronVersion}-headers.tar.gz' "$package_nix"
           grep -F 'requires electronArchiveHash' "$package_nix"
           grep -F 'requires electronHeadersHash' "$package_nix"
+          grep -F 'knownHostsPreflight = import ./korgo-known-hosts-preflight.nix' "$module_nix"
           grep -F 'IPAddressDeny=any' "$unit"
           grep -F 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' "$unit"
           grep -F 'ProtectHome=tmpfs' "$unit"

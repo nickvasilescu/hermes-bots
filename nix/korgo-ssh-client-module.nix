@@ -45,6 +45,14 @@ let
       [ "--containment-probe" ] ++ cfg.containmentProbeArguments
     )
   );
+  knownHostsLookup =
+    if cfg.port == 22 then cfg.miniAddress else "[${cfg.miniAddress}]:${toString cfg.port}";
+  knownHostsPreflight = import ./korgo-known-hosts-preflight.nix { inherit lib pkgs; } {
+    knownHostsFile = "/run/korgo-ssh/known_hosts";
+    knownHostsSha256 = cfg.knownHostsSha256;
+    lookup = knownHostsLookup;
+    hostKeyFingerprint = cfg.hostKeyFingerprint;
+  };
 
   preflight = pkgs.writeShellScript "korgo-ssh-client-preflight" ''
     set -euo pipefail
@@ -66,16 +74,7 @@ let
     case "$(stat -c %u -- "$known_hosts")" in 0|${toString cfg.uid}) ;; *) fail "known_hosts owner must be root or the configured user" ;; esac
     case "$(stat -c %a -- "$known_hosts")" in 400|600) ;; *) fail "known_hosts mode must be 0400 or 0600" ;; esac
 
-    actual_hash="$(${pkgs.coreutils}/bin/sha256sum "$known_hosts" | ${pkgs.coreutils}/bin/cut -d' ' -f1)"
-    [ "$actual_hash" = '${cfg.knownHostsSha256}' ] || fail "known_hosts content does not match the reviewed manifest hash"
-
-    lookup='${if cfg.port == 22 then cfg.miniAddress else "[${cfg.miniAddress}]:${toString cfg.port}"}'
-    ${pkgs.openssh}/bin/ssh-keygen -F "$lookup" -f "$known_hosts" >/dev/null ||
-      fail "known_hosts has no exact entry for the configured Mini address and port"
-    ${pkgs.openssh}/bin/ssh-keygen -lf "$known_hosts" -E sha256 \
-      | ${pkgs.gawk}/bin/awk '{print $2}' \
-      | ${pkgs.gnugrep}/bin/grep -Fx -- '${cfg.hostKeyFingerprint}' >/dev/null ||
-      fail "known_hosts does not contain the out-of-band verified fingerprint"
+    ${knownHostsPreflight}
 
     [ -S '${waylandSocket}' ] && [ ! -L '${waylandSocket}' ] || fail "configured Wayland socket is absent or symlinked"
   '';
@@ -111,7 +110,7 @@ in
 
     knownHostsFile = mkOption {
       type = types.strMatching "/[A-Za-z0-9._/+-]+";
-      description = "Host path to the out-of-band verified dedicated known_hosts file.";
+      description = "Host path to the out-of-band verified dedicated known_hosts file with exactly one Mini host/port key entry.";
     };
 
     knownHostsSha256 = mkOption {
@@ -121,7 +120,7 @@ in
 
     hostKeyFingerprint = mkOption {
       type = types.strMatching "SHA256:[A-Za-z0-9+/]{43}";
-      description = "Out-of-band verified OpenSSH SHA256 host-key fingerprint.";
+      description = "Out-of-band verified OpenSSH SHA256 fingerprint for the one exact Mini host/port key entry.";
     };
 
     miniAddress = mkOption {
