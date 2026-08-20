@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict'
 
-import { test } from 'vitest'
+import { test, vi } from 'vitest'
+
+const desktopProductState = vi.hoisted(() => ({ value: 'hermes' as 'bot' | 'hermes' }))
+
+vi.mock('./product', async importOriginal => {
+  const actual = (await importOriginal()) as Record<string, unknown>
+
+  return {
+    ...actual,
+    isBotProduct: () => desktopProductState.value === 'bot'
+  }
+})
 
 import {
   beginOrgoTailscaleSetup,
@@ -55,17 +66,13 @@ function json(data: unknown, status = 200) {
 }
 
 async function withDesktopProduct<T>(product: 'bot' | 'hermes', run: () => Promise<T>): Promise<T> {
-  const previous = process.env.HERMES_DESKTOP_PRODUCT
-  process.env.HERMES_DESKTOP_PRODUCT = product
+  const previous = desktopProductState.value
+  desktopProductState.value = product
 
   try {
     return await run()
   } finally {
-    if (previous === undefined) {
-      delete process.env.HERMES_DESKTOP_PRODUCT
-    } else {
-      process.env.HERMES_DESKTOP_PRODUCT = previous
-    }
+    desktopProductState.value = previous
   }
 }
 
@@ -228,7 +235,10 @@ test('lists workspaces and computers without exposing the key in parsed results'
   assert.deepEqual(workspaces, [{ id: WORKSPACE_ID, name: 'Bots', status: undefined }])
   assert.equal(computers[0]?.id, COMPUTER_ID)
   assert.equal(JSON.stringify(computers).includes('orgo-secret'), false)
-  assert.equal(calls.some(url => url.includes('/computers')), false)
+  assert.equal(
+    calls.some(url => url.includes('/computers')),
+    false
+  )
 })
 
 test('reuses dedicated Korgo Bot and legacy Hermes Bots workspaces', () => {
@@ -259,9 +269,7 @@ test('recovers the legacy workspace when create races an existing resource', asy
     if (url.endsWith('/workspaces')) {
       listCalls += 1
 
-      return listCalls === 1
-        ? json({ projects: [] })
-        : json({ projects: [{ id: WORKSPACE_ID, name: 'Hermes Bots' }] })
+      return listCalls === 1 ? json({ projects: [] }) : json({ projects: [{ id: WORKSPACE_ID, name: 'Hermes Bots' }] })
     }
 
     return json({}, 404)
@@ -441,13 +449,14 @@ test('installs Hermes on a computer that does not have it yet', async () => {
     return json({ id: COMPUTER_ID, name: 'Shared', status: 'running', instance_id: '8b517302' })
   }) as typeof fetch
 
-  const result = await withHermesProduct(() =>
-    ensureHermesInstalledOnOrgo('orgo-secret', COMPUTER_ID, fetchImpl)
-  )
+  const result = await withHermesProduct(() => ensureHermesInstalledOnOrgo('orgo-secret', COMPUTER_ID, fetchImpl))
 
   assert.equal(result.installed, true)
   assert.equal(result.installedNow, true)
-  assert.equal(commands.some(command => command.includes('install.sh')), true)
+  assert.equal(
+    commands.some(command => command.includes('install.sh')),
+    true
+  )
 })
 
 test('does not install an unpinned latest Hermes build in the Bot product', async () => {
@@ -470,7 +479,10 @@ test('does not install an unpinned latest Hermes build in the Bot product', asyn
     () => withBotProduct(() => ensureHermesInstalledOnOrgo('orgo-secret', COMPUTER_ID, fetchImpl)),
     /will not install an unpinned Hermes build/
   )
-  assert.equal(commands.some(command => command.includes('install.sh')), false)
+  assert.equal(
+    commands.some(command => command.includes('install.sh')),
+    false
+  )
 })
 
 test('skips the installer when Hermes is already on PATH', async () => {
@@ -491,7 +503,10 @@ test('skips the installer when Hermes is already on PATH', async () => {
 
   const result = await ensureHermesInstalledOnOrgo('orgo-secret', COMPUTER_ID, fetchImpl)
   assert.equal(result.installedNow, false)
-  assert.equal(commands.some(command => command.includes('install.sh')), false)
+  assert.equal(
+    commands.some(command => command.includes('install.sh')),
+    false
+  )
 })
 
 test('updates an incompatible Bot backend to the pinned SSH-compatible revision', async () => {
@@ -524,14 +539,18 @@ test('updates an incompatible Bot backend to the pinned SSH-compatible revision'
     return json({ id: COMPUTER_ID, name: 'Shared', status: 'running', instance_id: '8b517302' })
   }) as typeof fetch
 
-  const result = await withBotProduct(() =>
-    ensureHermesInstalledOnOrgo('orgo-secret', COMPUTER_ID, fetchImpl)
-  )
+  const result = await withBotProduct(() => ensureHermesInstalledOnOrgo('orgo-secret', COMPUTER_ID, fetchImpl))
 
   assert.equal(result.updatedNow, true)
   assert.equal(updateTimeout, 180)
-  assert.equal(commands.some(command => command.includes(BOT_REMOTE_HERMES_REF)), true)
-  assert.equal(commands.some(command => command.includes('pip install')), true)
+  assert.equal(
+    commands.some(command => command.includes(BOT_REMOTE_HERMES_REF)),
+    true
+  )
+  assert.equal(
+    commands.some(command => command.includes('pip install')),
+    true
+  )
 })
 
 test('uses Orgo curated Hermes template and does not reinstall on that snapshot', async () => {
@@ -569,7 +588,12 @@ test('uses Orgo curated Hermes template and does not reinstall on that snapshot'
   )
   assert.equal(
     pickSharedHermesComputer([
-      { id: 'aaaaaaaa-3864-494b-a82c-15280c5d9f9e', name: 'Claude', status: 'running', templateRef: 'system/claude-code@1.0.0' },
+      {
+        id: 'aaaaaaaa-3864-494b-a82c-15280c5d9f9e',
+        name: 'Claude',
+        status: 'running',
+        templateRef: 'system/claude-code@1.0.0'
+      },
       { id: COMPUTER_ID, name: 'Hermes', status: 'running', templateRef: 'system/hermes-agent@1.0.0' }
     ])?.id,
     COMPUTER_ID
@@ -654,17 +678,50 @@ test('starts Tailscale and returns the VM authorization challenge', async () => 
 
   const status = await beginOrgoTailscaleSetup('orgo-secret', COMPUTER_ID, fetchImpl, async () => undefined)
   assert.equal(status.authUrl, 'https://login.tailscale.com/a/setup123')
-  assert.equal(commands.some(command => command.includes('command -v tailscaled')), true)
-  assert.equal(commands.some(command => command.includes('/usr/sbin/tailscaled')), true)
-  assert.equal(commands.some(command => command.includes('--tun=userspace-networking')), true)
-  assert.equal(commands.some(command => command.includes('--ssh')), true)
-  assert.equal(commands.some(command => command.includes('nohup tailscale up --json --ssh')), true)
-  assert.equal(commands.some(command => command.includes("pkill -f '^tailscale (up|login)( |$)'")), true)
-  assert.equal(commands.some(command => command.includes(TAILSCALE_AUTH_LOG_PATH)), true)
-  assert.equal(commands.some(command => command.includes('timeout 12s tailscale up')), false)
-  assert.equal(commands.some(command => command.includes('timeout 3s tailscale status')), true)
-  assert.equal(commands.some(command => command.includes('pkill -x tailscaled')), true)
-  assert.equal(commands.some(command => command.includes('nohup "$tailscaled_bin"')), true)
+  assert.equal(
+    commands.some(command => command.includes('command -v tailscaled')),
+    true
+  )
+  assert.equal(
+    commands.some(command => command.includes('/usr/sbin/tailscaled')),
+    true
+  )
+  assert.equal(
+    commands.some(command => command.includes('--tun=userspace-networking')),
+    true
+  )
+  assert.equal(
+    commands.some(command => command.includes('--ssh')),
+    true
+  )
+  assert.equal(
+    commands.some(command => command.includes('nohup tailscale up --json --ssh')),
+    true
+  )
+  assert.equal(
+    commands.some(command => command.includes("pkill -f '^tailscale (up|login)( |$)'")),
+    true
+  )
+  assert.equal(
+    commands.some(command => command.includes(TAILSCALE_AUTH_LOG_PATH)),
+    true
+  )
+  assert.equal(
+    commands.some(command => command.includes('timeout 12s tailscale up')),
+    false
+  )
+  assert.equal(
+    commands.some(command => command.includes('timeout 3s tailscale status')),
+    true
+  )
+  assert.equal(
+    commands.some(command => command.includes('pkill -x tailscaled')),
+    true
+  )
+  assert.equal(
+    commands.some(command => command.includes('nohup "$tailscaled_bin"')),
+    true
+  )
   assert.deepEqual(installTimeouts, [TAILSCALE_INSTALL_TIMEOUT_SECONDS, TAILSCALE_INSTALL_TIMEOUT_SECONDS])
 })
 
@@ -709,9 +766,18 @@ test('waits for one authorization process instead of starting competing logins',
   assert.equal(status.authUrl, 'https://login.tailscale.com/a/delayed123')
   assert.equal(pollCount, 13)
   assert.equal(commands.filter(command => command.includes(`rm -f ${TAILSCALE_AUTH_LOG_PATH}`)).length, 1)
-  assert.equal(commands.some(command => command.includes('tailscale up --json --ssh')), true)
-  assert.equal(commands.some(command => command.includes('--force-reauth')), false)
-  assert.equal(commands.some(command => command.includes('timeout 12s')), false)
+  assert.equal(
+    commands.some(command => command.includes('tailscale up --json --ssh')),
+    true
+  )
+  assert.equal(
+    commands.some(command => command.includes('--force-reauth')),
+    false
+  )
+  assert.equal(
+    commands.some(command => command.includes('timeout 12s')),
+    false
+  )
 })
 
 test('reports a missing Tailscale authorization URL instead of silently stalling', async () => {
