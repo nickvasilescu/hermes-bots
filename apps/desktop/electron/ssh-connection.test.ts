@@ -125,6 +125,8 @@ test('strict host-key policy reaches every SSH operation constructor', () => {
     assert.match(joined, /UserKnownHostsFile=\/tmp\/korgo-known-hosts/)
     assert.match(joined, /GlobalKnownHostsFile=\/dev\/null/)
     assert.match(joined, /UpdateHostKeys=no/)
+    assert.match(joined, /IdentitiesOnly=yes/)
+    assert.match(joined, /IdentityAgent=none/)
     assert.ok(!joined.includes('accept-new'))
   }
 })

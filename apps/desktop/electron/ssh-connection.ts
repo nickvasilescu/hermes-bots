@@ -174,7 +174,11 @@ function baseSshOptions(controlPath, connectTimeoutMs?, hostKeyPolicy?: any) {
         '-o',
         `GlobalKnownHostsFile=${hostKeyPolicy.globalKnownHostsFile}`,
         '-o',
-        `UpdateHostKeys=${hostKeyPolicy.updateHostKeys}`
+        `UpdateHostKeys=${hostKeyPolicy.updateHostKeys}`,
+        '-o',
+        'IdentitiesOnly=yes',
+        '-o',
+        'IdentityAgent=none'
       ]
     : ['-o', 'StrictHostKeyChecking=accept-new']
 
