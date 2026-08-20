@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+
+import { test } from 'vitest'
 
 import { assertSshOnlyApiRequestAllowed } from './ssh-api-policy'
 
