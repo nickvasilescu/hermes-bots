@@ -186,6 +186,8 @@ function baseSshOptions(controlPath, connectTimeoutMs?, hostKeyPolicy?: any) {
     ...mux,
     '-o',
     'BatchMode=yes',
+    '-o',
+    'ForwardAgent=no',
     ...hostKeyOptions,
     '-o',
     'ExitOnForwardFailure=yes',
@@ -385,6 +387,14 @@ function sshErrorMessage(kind, conn, stderr?, hostKeyPolicy?: any) {
       return `The fixed SSH identity file is unsafe: ${conn.keyPath || 'unknown path'}.`
 
     case SSH_ERROR.AUTH_FAILED:
+      if (hostKeyPolicy) {
+        return (
+          `SSH authentication to ${host} failed. The fixed dedicated identity ${conn.keyPath || 'file'} ` +
+          'must authenticate non-interactively. The operator must repair or replace that identity outside ' +
+          `this app. Original error: ${String(stderr || '').trim()}`
+        )
+      }
+
       return (
         `SSH authentication to ${host} failed. Desktop runs ssh non-interactively ` +
         `(BatchMode), so a key requiring a passphrase or 2FA must be loaded into your ` +

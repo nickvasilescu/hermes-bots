@@ -152,6 +152,7 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           set -euo pipefail
           launcher=${../packaging/korgo-ssh-client/korgo-ssh-client-bwrap}
           probe=${../packaging/korgo-ssh-client/korgo-ssh-client-containment-probe}
+          no_dbus_smoke=${../packaging/korgo-ssh-client/korgo-ssh-client-no-dbus-smoke}
           unit=${../packaging/korgo-ssh-client/korgo-ssh-client.service}
           package_nix=${./korgo-ssh-client.nix}
           module_nix=${./korgo-ssh-client-module.nix}
@@ -159,26 +160,45 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           grep -F -- '--clearenv' "$launcher"
           grep -F -- 'must run inside the korgo-ssh-client system service' "$launcher"
           grep -F -- '--unsetenv SSH_AUTH_SOCK' "$launcher"
+          grep -F -- '--unsetenv DBUS_SESSION_BUS_ADDRESS' "$launcher"
           grep -F -- '--ro-bind /nix/store /nix/store' "$launcher"
           grep -F -- '--ro-bind "$identity" "$identity"' "$launcher"
           grep -F -- '--ro-bind "$known_hosts" "$known_hosts"' "$launcher"
           grep -F -- '--bind "$wayland_socket" "$wayland_socket"' "$launcher"
+          grep -F -- '--setenv FONTCONFIG_FILE @fontconfig_file@' "$launcher"
+          ! grep -F -- 'dbus_socket=' "$launcher"
+          ! grep -F -- '--bind "$dbus_socket" "$dbus_socket"' "$launcher"
+          ! grep -F -- '--setenv DBUS_SESSION_BUS_ADDRESS "unix:path=' "$launcher"
           ! grep -E -- '--(ro-)?bind[^#]*(\$HOME|"\$runtime_dir"[[:space:]]+"\$runtime_dir")' "$launcher"
 
           grep -F -- 'SSH_AUTH_SOCK is present' "$probe"
           grep -F -- 'cannot stat forbidden dummy marker' "$probe"
           grep -F -- 'dummy identity is writable' "$probe"
           grep -F -- 'dummy known_hosts is writable' "$probe"
+          grep -F -- 'DBUS_SESSION_BUS_ADDRESS is present' "$probe"
+          grep -F -- 'raw session D-Bus socket is visible' "$probe"
+          grep -F -- 'Secret Service and the user systemd manager have no reachable session D-Bus transport' "$probe"
           grep -F -- 'approved endpoint did not connect' "$probe"
           grep -F -- 'unapproved endpoint connected' "$probe"
           test -x ${korgoContainmentProbe}/bin/korgo-ssh-client-containment-probe
+          test -x "$no_dbus_smoke"
+          grep -F -- '--unsetenv DBUS_SESSION_BUS_ADDRESS' "$no_dbus_smoke"
+          grep -F -- 'bubblewrapped Electron remained alive for 8s without a session D-Bus transport' "$no_dbus_smoke"
 
           grep -F 'electronVersion = "43.4.1";' "$package_nix"
           grep -F 'electron-v''${electronVersion}-linux-x64.zip' "$package_nix"
           grep -F 'node-v''${electronVersion}-headers.tar.gz' "$package_nix"
           grep -F 'requires electronArchiveHash' "$package_nix"
           grep -F 'requires electronHeadersHash' "$package_nix"
+          grep -F 'node apps/desktop/scripts/verify-ssh-only-bundle.mjs "$app"' "$package_nix"
           grep -F 'knownHostsPreflight = import ./korgo-known-hosts-preflight.nix' "$module_nix"
+          grep -F 'known_hosts owner is not the configured user' "$module_nix"
+          grep -F 'serviceEntry = pkgs.writeShellScript "korgo-ssh-client-entry"' "$module_nix"
+          grep -F 'ExecStartPre process would get a separate BindReadOnlyPaths resolution' "$module_nix"
+          grep -F '    ''${preflight}' "$module_nix"
+          grep -F '    exec ''${execStart}' "$module_nix"
+          grep -F 'ExecStart = serviceEntry;' "$module_nix"
+          ! grep -F 'preStart =' "$module_nix"
           grep -F 'IPAddressDeny=any' "$unit"
           grep -F 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' "$unit"
           grep -F 'ProtectHome=tmpfs' "$unit"

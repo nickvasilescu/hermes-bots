@@ -161,6 +161,7 @@ let
       test -f "$app/resources/app.asar.unpacked/dist/node_modules/node-pty/build/Release/pty.node"
       test ! -e "$app/resources/orgo"
       test -f apps/desktop/dist/node_modules/node-pty/build/Release/pty.node
+      node apps/desktop/scripts/verify-ssh-only-bundle.mjs "$app"
       runHook postCheck
     '';
 
@@ -201,6 +202,7 @@ stdenv.mkDerivation {
       --replace-fail '@bwrap@' '${lib.getExe bubblewrap}' \
       --replace-fail '@app_executable@' "'$out/libexec/korgo-ssh-client/Korgo Bot'" \
       --replace-fail '@probe_executable@' "'${containmentProbe}/bin/korgo-ssh-client-containment-probe'" \
+      --replace-fail '@fontconfig_file@' '${pkgs.fontconfig.out}/etc/fonts/fonts.conf' \
       --replace-fail '@runtime_path@' '${
         lib.makeBinPath [
           coreutils

@@ -26,6 +26,9 @@ less-trusted plugins/content, or a generic remote-desktop SKU.
 - Normal home data, `.ssh`, `.hermes`, credential stores, project trees, and
   SSH-agent sockets are not mounted. `HOME` is synthetic and
   `SSH_AUTH_SOCK` is absent.
+- Neither the session nor system D-Bus socket is mounted, and
+  `DBUS_SESSION_BUS_ADDRESS` is absent. Same-user Secret Service, portals, and
+  the user systemd manager are outside the client boundary.
 - Egress is denied except loopback and one numeric Mini Tailscale `/32` or
   `/128`. Hostnames and DNS are unnecessary.
 - Host trust is pre-seeded. `ssh-keyscan` can collect a candidate key but
@@ -41,7 +44,7 @@ less-trusted plugins/content, or a generic remote-desktop SKU.
 | ID | Threat | Disposition and required evidence |
 | --- | --- | --- |
 | T01 | Mini SSH spoofing | Mitigate with an out-of-band verified, pre-seeded key and a mismatch-before-auth test. TOFU is forbidden. |
-| T02 | Identity/known-host tampering | Mitigate with exact read-only binds, regular-file and mode checks, the reviewed known-hosts SHA256 manifest, and expected fingerprint check. |
+| T02 | Identity/known-host tampering | Mitigate with exact read-only binds plus regular-file, owner, mode, manifest, and fingerprint checks in the same `ExecStart` mount namespace that launches the client. |
 | T03 | Unreviewed cutover | Mitigate with reviewed Git/artifact hashes plus explicit G4 and G6 records in the non-secret evidence manifest. |
 | T04 | Transient gateway credential in renderer | Remains a High residual only if Carter records `ACCEPT-INCREMENTAL` at G4 for this topology. Otherwise the main-process proxy is mandatory before credentials. |
 | T05 | Host secret disclosure | Mitigate with exact bwrap mounts, a cleared environment, synthetic home, no agent, and the G3 dummy read-denial matrix. |
@@ -76,7 +79,7 @@ not recorded.
 
 Stop before launch on a missing/mismatched host key, wrong Hermes
 version/commit/schema, missing package evidence, ignored IP controls, readable
-host marker, inherited agent socket, unexpected egress, local/bootstrap trace,
-disabled Chromium sandbox, open CDP, untrusted IPC side effect, or a secret in
-logs/evidence/Git. Revoke the dedicated key if it was ever mounted during a
-failed staged/live test.
+host marker, inherited agent socket, visible session/system D-Bus transport,
+unexpected egress, local/bootstrap trace, disabled Chromium sandbox, open CDP,
+untrusted IPC side effect, or a secret in logs/evidence/Git. Revoke the
+dedicated key if it was ever mounted during a failed staged/live test.

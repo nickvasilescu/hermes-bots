@@ -71,12 +71,20 @@ let
     [ -f "$known_hosts" ] && [ ! -L "$known_hosts" ] || fail "known_hosts must be one regular, non-symlink file"
     [ "$(stat -c %u -- "$identity")" = ${toString cfg.uid} ] || fail "identity owner is not the configured user"
     case "$(stat -c %a -- "$identity")" in 400|600) ;; *) fail "identity mode must be 0400 or 0600" ;; esac
-    case "$(stat -c %u -- "$known_hosts")" in 0|${toString cfg.uid}) ;; *) fail "known_hosts owner must be root or the configured user" ;; esac
+    [ "$(stat -c %u -- "$known_hosts")" = ${toString cfg.uid} ] || fail "known_hosts owner is not the configured user"
     case "$(stat -c %a -- "$known_hosts")" in 400|600) ;; *) fail "known_hosts mode must be 0400 or 0600" ;; esac
 
     ${knownHostsPreflight}
 
     [ -S '${waylandSocket}' ] && [ ! -L '${waylandSocket}' ] || fail "configured Wayland socket is absent or symlinked"
+  '';
+  serviceEntry = pkgs.writeShellScript "korgo-ssh-client-entry" ''
+    set -euo pipefail
+
+    # Keep validation and launch in one systemd-created mount namespace. An
+    # ExecStartPre process would get a separate BindReadOnlyPaths resolution.
+    ${preflight}
+    exec ${execStart}
   '';
 in
 {
@@ -110,7 +118,7 @@ in
 
     knownHostsFile = mkOption {
       type = types.strMatching "/[A-Za-z0-9._/+-]+";
-      description = "Host path to the out-of-band verified dedicated known_hosts file with exactly one Mini host/port key entry.";
+      description = "Host path owned by the configured user to the out-of-band verified dedicated known_hosts file with exactly one Mini host/port key entry.";
     };
 
     knownHostsSha256 = mkOption {
@@ -229,13 +237,11 @@ in
         WAYLAND_DISPLAY = cfg.waylandDisplay;
       };
 
-      preStart = "${preflight}";
-
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
         Group = cfg.group;
-        ExecStart = execStart;
+        ExecStart = serviceEntry;
         UMask = "0077";
 
         RuntimeDirectory = "korgo-ssh";

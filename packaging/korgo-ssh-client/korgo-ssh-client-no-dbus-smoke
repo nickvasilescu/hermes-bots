@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+package_path="${1:-}"
+[[ "$package_path" == /nix/store/*-korgo-ssh-client-* && -d "$package_path" ]] ||
+  fail "usage: $0 /nix/store/...-korgo-ssh-client-..."
+
+launcher="$package_path/bin/korgo-ssh-client"
+app="$package_path/libexec/korgo-ssh-client/Korgo Bot"
+[[ -x "$launcher" && -x "$app" ]] || fail "package launcher or Electron executable is missing"
+
+command -v bwrap >/dev/null || fail "bubblewrap is required"
+command -v Xvfb >/dev/null || fail "Xvfb is required"
+command -v timeout >/dev/null || fail "timeout is required"
+
+grep -F -- '--unsetenv DBUS_SESSION_BUS_ADDRESS' "$launcher" >/dev/null ||
+  fail "installed launcher does not explicitly remove the session-bus address"
+if grep -F -- 'dbus_socket=' "$launcher" >/dev/null ||
+  grep -F -- '--setenv DBUS_SESSION_BUS_ADDRESS "unix:path=' "$launcher" >/dev/null; then
+  fail "installed launcher contains a raw session-bus path or address"
+fi
+
+fontconfig_file="$(
+  sed -n 's/^[[:space:]]*--setenv FONTCONFIG_FILE \([^[:space:]]*\)$/\1/p' "$launcher"
+)"
+[[ "$fontconfig_file" == /nix/store/*/etc/fonts/fonts.conf && -f "$fontconfig_file" ]] ||
+  fail "installed launcher does not pin a usable Nix-store fontconfig file"
+
+smoke_dir="$(mktemp -d)"
+xvfb_pid=""
+cleanup() {
+  if [[ -n "$xvfb_pid" ]]; then
+    kill "$xvfb_pid" 2>/dev/null || true
+  fi
+  rm -rf -- "$smoke_dir"
+}
+trap cleanup EXIT
+
+display_file="$smoke_dir/display"
+Xvfb -displayfd 3 -screen 0 1280x800x24 -nolisten tcp -ac \
+  >"$smoke_dir/xvfb.log" 2>&1 3>"$display_file" &
+xvfb_pid=$!
+
+display_number=""
+for _ in $(seq 1 100); do
+  if [[ -s "$display_file" ]]; then
+    read -r display_number <"$display_file"
+    [[ -S "/tmp/.X11-unix/X$display_number" ]] && break
+  fi
+  sleep 0.05
+done
+[[ "$display_number" =~ ^[0-9]+$ && -S "/tmp/.X11-unix/X$display_number" ]] ||
+  fail "Xvfb did not create a display socket"
+
+uid="$(id -u)"
+set +e
+timeout 8s bwrap \
+  --die-with-parent \
+  --new-session \
+  --unshare-all \
+  --share-net \
+  --cap-drop ALL \
+  --clearenv \
+  --unsetenv SSH_AUTH_SOCK \
+  --unsetenv DBUS_SESSION_BUS_ADDRESS \
+  --ro-bind /nix/store /nix/store \
+  --proc /proc \
+  --dev /dev \
+  --tmpfs /dev/shm \
+  --dir /tmp \
+  --dir /tmp/.X11-unix \
+  --bind "/tmp/.X11-unix/X$display_number" "/tmp/.X11-unix/X$display_number" \
+  --dir /var \
+  --dir /var/empty \
+  --dir /var/lib \
+  --dir /var/lib/korgo-smoke \
+  --dir /var/cache \
+  --dir /var/cache/korgo-smoke \
+  --dir /run \
+  --dir /run/user \
+  --dir "/run/user/$uid" \
+  --setenv HOME /var/empty \
+  --setenv XDG_CONFIG_HOME /var/lib/korgo-smoke/config \
+  --setenv XDG_DATA_HOME /var/lib/korgo-smoke/data \
+  --setenv XDG_CACHE_HOME /var/cache/korgo-smoke \
+  --setenv XDG_RUNTIME_DIR "/run/user/$uid" \
+  --setenv DISPLAY ":$display_number" \
+  --setenv ELECTRON_OZONE_PLATFORM_HINT x11 \
+  --setenv FONTCONFIG_FILE "$fontconfig_file" \
+  --setenv ELECTRON_IS_DEV 0 \
+  --setenv NODE_ENV production \
+  --setenv LANG C.UTF-8 \
+  --setenv LC_ALL C.UTF-8 \
+  --setenv TMPDIR /tmp \
+  -- "$app" --disable-gpu --disable-dev-shm-usage \
+  >"$smoke_dir/app.log" 2>&1
+status=$?
+set -e
+
+if [[ "$status" -ne 124 ]]; then
+  cat "$smoke_dir/app.log" >&2
+  fail "bubblewrapped Electron exited early with status $status"
+fi
+
+if grep -F -- 'FATAL:' "$smoke_dir/app.log" >/dev/null; then
+  cat "$smoke_dir/app.log" >&2
+  fail "bubblewrapped Electron logged a fatal startup error"
+fi
+
+echo "PASS: bubblewrapped Electron remained alive for 8s without a session D-Bus transport"

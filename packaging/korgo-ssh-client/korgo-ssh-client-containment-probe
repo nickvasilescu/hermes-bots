@@ -39,6 +39,13 @@ done
 [[ -z "${SSH_AUTH_SOCK+x}" ]] || fail "SSH_AUTH_SOCK is present"
 pass "broad HOME and SSH agent environment are absent"
 
+[[ -z "${DBUS_SESSION_BUS_ADDRESS+x}" ]] || fail "DBUS_SESSION_BUS_ADDRESS is present"
+[[ -n "${XDG_RUNTIME_DIR:-}" ]] || fail "XDG_RUNTIME_DIR is absent"
+session_bus_socket="$XDG_RUNTIME_DIR/bus"
+[[ ! -e "$session_bus_socket" && ! -L "$session_bus_socket" ]] ||
+  fail "raw session D-Bus socket is visible"
+pass "Secret Service and the user systemd manager have no reachable session D-Bus transport"
+
 for path in "${forbidden_paths[@]}"; do
   [[ "$path" == /* ]] || fail "forbidden marker path must be absolute"
   if stat -- "$path" >/dev/null 2>&1; then

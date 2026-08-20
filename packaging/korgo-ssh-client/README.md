@@ -6,13 +6,18 @@ This directory contains the runtime boundary used by
 
 - `korgo-ssh-client-bwrap` admits only the immutable Nix store, dedicated app
   data/cache, the fixed read-only identity and known-hosts files, and exact
-  Wayland/D-Bus/audio sockets. It clears the environment and does not bind a
-  home directory, `.ssh`, `.hermes`, project tree, SSH agent, or whole runtime
-  directory. It also refuses to run outside the exact system-service cgroup, so
-  launching the package binary directly cannot bypass destination-IP controls.
+  Wayland/audio sockets. It admits no session or system D-Bus transport, clears
+  the environment, and does not bind a home directory, `.ssh`, `.hermes`,
+  project tree, SSH agent, or whole runtime directory. It also refuses to run
+  outside the exact system-service cgroup, so launching the package binary
+  directly cannot bypass destination-IP controls.
 - `korgo-ssh-client-containment-probe` is a dummy-only filesystem,
   environment, and network assertion tool. The launcher accepts the fixed
   `--containment-probe` switch; it never accepts an arbitrary command.
+- `korgo-ssh-client-no-dbus-smoke` starts the built Electron artifact inside a
+  separate Xvfb/bubblewrap test sandbox and requires it to stay alive without
+  any session D-Bus transport. It is a build-time test, not an installed
+  launcher mode.
 - `korgo-ssh-client.service` is a fail-closed syntax/reference policy. It has an
   inert `ExecStart` and no Mini allow rule. The NixOS module generates the
   operational system service only after the reviewed user, UID, secret source

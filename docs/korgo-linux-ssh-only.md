@@ -85,14 +85,21 @@ credential-bearing logs into the evidence manifest.
    npm --workspace apps/desktop run verify:bot:linux:ssh-only
    xvfb-run --auto-servernum \
      npm --workspace apps/desktop run test:e2e:bot:linux:ssh-only
+   korgo_package="$(nix build .#korgo-ssh-client --no-link --print-out-paths)"
+   nix shell --inputs-from . \
+     nixpkgs#bash nixpkgs#bubblewrap nixpkgs#coreutils nixpkgs#gnugrep \
+     nixpkgs#gnused nixpkgs#xorg.xorgserver \
+     --command ./packaging/korgo-ssh-client/korgo-ssh-client-no-dbus-smoke \
+     "$korgo_package"
    ```
 
 Expected: the source build uses the committed lockfile and fixed Electron
 distribution/headers, reports Electron 43.4.1, produces an unpacked runtime
 instead of using FUSE, and the bundle/security scans have zero banned findings.
-Complete the full type/lint/unit/package matrix and record the AppImage and
-`linux-unpacked` SHA256 values required by G2. No real identity, known-hosts, or
-Mini access is allowed yet.
+The bubblewrap/Xvfb smoke must keep Electron alive for eight seconds with no
+session D-Bus transport. Complete the full type/lint/unit/package matrix and
+record the AppImage and `linux-unpacked` SHA256 values required by G2. No real
+identity, known-hosts, or Mini access is allowed yet.
 
 Stop if a build downloads anything not pinned, consumes `release/`, reports a
 different Electron version, omits a mandatory artifact/test, disables Chromium
@@ -136,9 +143,11 @@ and starts the service in its own cgroup; the package launcher refuses direct
 execution outside that cgroup. If the socket already exists when the module is
 first applied, start the unit through the system manager for that initial dummy
 test. Closing Korgo does not immediately relaunch it; the next socket creation
-at login is a new activation event. Confirm `systemctl show korgo-ssh-client` reports
-`IPAddressDeny=any`, loopback plus only the staged Mini `/32` or `/128`, and the
-expected hardening. Run the fixed probe by setting
+at login is a new activation event. The generated `ExecStart` wrapper validates
+the bound SSH inputs and immediately `exec`s the launcher in the same mount
+namespace; do not split that validation into `ExecStartPre`. Confirm
+`systemctl show korgo-ssh-client` reports `IPAddressDeny=any`, loopback plus only
+the staged Mini `/32` or `/128`, and the expected hardening. Run the fixed probe by setting
 `containmentProbeArguments` in the dummy module config:
 
 ```text
@@ -155,10 +164,12 @@ expected hardening. Run the fixed probe by setting
 
 Use controlled non-secret listeners so a timeout is meaningful. Also test the
 metadata address if applicable. Expected: marker stats fail, `SSH_AUTH_SOCK` is
-absent, only the fixed dummy SSH inputs are visible and read-only, loopback and
-the exact staged Mini connect, and every other route is denied. If systemd
-ignores an IP directive, stop. Use a corrected declarative system-service or
-dedicated network-namespace/nftables design; never widen egress.
+absent, `DBUS_SESSION_BUS_ADDRESS` and the raw session-bus socket are absent,
+Secret Service and the user systemd manager are unreachable, only the fixed
+dummy SSH inputs are visible and read-only, loopback and the exact staged Mini
+connect, and every other route is denied. If systemd ignores an IP directive,
+stop. Use a corrected declarative system-service or dedicated
+network-namespace/nftables design; never widen egress.
 
 Remove `containmentProbeArguments` and re-review/rebuild the host configuration
 before G4/G5. The service must never select probe mode while real inputs are in
@@ -182,22 +193,25 @@ discard the other candidate lines. Keep the literal numeric host/port field;
 markers, aliases, wildcards, and hashed hostnames are rejected by preflight. On
 any mismatch, stop and discard the candidate; never accept on first connection
 or overwrite an existing record in-app. After G4 permits real inputs, install
-that one-line file as owner/root readable only (`0400` or `0600`) and record its
-content SHA256. The module verifies the file hash, requires exactly one key for
-the exact Mini host/port, and computes the fingerprint from that matching key
-before Electron starts. A verified key elsewhere in the file cannot authorize
-a different Mini key. Create a dedicated identity with no reuse and no agent
-or forwarding; keep it owner-only.
+that one-line file owned by the configured unprivileged service user with mode
+`0400` or `0600`, and record its content SHA256. Root ownership is rejected
+because the service runs without privilege and must validate/read both fixed
+SSH inputs itself. The module verifies the file hash, requires exactly one key
+for the exact Mini host/port, and computes the fingerprint from that matching
+key before Electron starts. A verified key elsewhere in the file cannot
+authorize a different Mini key. Create a dedicated identity with no reuse and
+no agent or forwarding; keep it owned by that same service user.
 
 A reviewed host-secret path under `/run` or `/var` is required. After the G4
 decision, the human/operator may create the dedicated key and install the
 verified candidate with commands equivalent to:
 
 ```bash
-install -d -m 0700 /var/lib/korgo-ssh-secrets
+install -d -o REVIEWED_USER -g REVIEWED_GROUP -m 0700 /var/lib/korgo-ssh-secrets
 ssh-keygen -t ed25519 -N '' \
   -C korgo-ssh-client -f /var/lib/korgo-ssh-secrets/identity
-install -m 0600 candidate_known_hosts \
+chown REVIEWED_USER:REVIEWED_GROUP /var/lib/korgo-ssh-secrets/identity
+install -o REVIEWED_USER -g REVIEWED_GROUP -m 0600 candidate_known_hosts \
   /var/lib/korgo-ssh-secrets/known_hosts
 sha256sum /var/lib/korgo-ssh-secrets/known_hosts
 ```

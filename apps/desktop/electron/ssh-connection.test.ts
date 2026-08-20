@@ -89,6 +89,7 @@ test('baseSshOptions carries the house ControlMaster/BatchMode/accept-new policy
   assert.match(joined, /ControlMaster=auto/)
   assert.match(joined, /ControlPersist=\d+/)
   assert.match(joined, /BatchMode=yes/)
+  assert.match(joined, /ForwardAgent=no/)
   assert.match(joined, /StrictHostKeyChecking=accept-new/)
   assert.match(joined, /ExitOnForwardFailure=yes/)
   assert.match(joined, /ConnectTimeout=15/)
@@ -127,6 +128,7 @@ test('strict host-key policy reaches every SSH operation constructor', () => {
     assert.match(joined, /UpdateHostKeys=no/)
     assert.match(joined, /IdentitiesOnly=yes/)
     assert.match(joined, /IdentityAgent=none/)
+    assert.match(joined, /ForwardAgent=no/)
     assert.ok(!joined.includes('accept-new'))
   }
 })
@@ -262,6 +264,37 @@ test('pinned file validation rejects missing, symlinked, writable, and wrong-tar
   }
 })
 
+test('pinned file validation rejects a root-owned known-hosts file for the unprivileged client', () => {
+  const identity = '/run/korgo-ssh/identity'
+  const knownHosts = '/run/korgo-ssh/known_hosts'
+  const currentUid = 1000
+
+  const policy = {
+    strictHostKeyChecking: 'yes',
+    userKnownHostsFile: knownHosts,
+    globalKnownHostsFile: '/dev/null',
+    updateHostKeys: 'no'
+  }
+
+  const conn = { host: '100.100.10.20', port: 22, keyPath: identity }
+
+  const fsApi = {
+    lstatSync(filePath) {
+      return {
+        isSymbolicLink: () => false,
+        isFile: () => true,
+        uid: filePath === knownHosts ? 0 : currentUid,
+        mode: 0o100600
+      }
+    }
+  }
+
+  assert.throws(
+    () => validatePinnedSshFiles(conn, policy, fsApi, () => currentUid),
+    (error: any) => error.kind === SSH_ERROR.KNOWN_HOSTS_UNSAFE && /current user/.test(error.message)
+  )
+})
+
 test('classifySshError detects auth failure', () => {
   assert.equal(classifySshError('Permission denied (publickey).'), SSH_ERROR.AUTH_FAILED)
   assert.equal(classifySshError('Too many authentication failures'), SSH_ERROR.AUTH_FAILED)
@@ -276,6 +309,16 @@ test('sshErrorMessage gives actionable guidance for auth and host-key-change', (
   const conn = { user: 'me', host: 'box', port: 22 }
   assert.match(sshErrorMessage(SSH_ERROR.AUTH_FAILED, conn, 'Permission denied'), /ssh-agent|ssh-add|IdentityFile/)
   assert.match(sshErrorMessage(SSH_ERROR.HOST_KEY_CHANGED, conn, 'CHANGED'), /ssh-keygen -R box/)
+})
+
+test('strict SSH authentication failure points only to the fixed operator-managed identity', () => {
+  const conn = { user: 'me', host: 'box', port: 22, keyPath: '/run/korgo-ssh/identity' }
+  const policy = { userKnownHostsFile: '/run/korgo-ssh/known_hosts' }
+  const message = sshErrorMessage(SSH_ERROR.AUTH_FAILED, conn, 'Permission denied', policy)
+
+  assert.match(message, /fixed dedicated identity \/run\/korgo-ssh\/identity/)
+  assert.match(message, /operator must repair or replace that identity outside this app/i)
+  assert.doesNotMatch(message, /ssh-agent|ssh-add|\.ssh\/config|IdentityFile/)
 })
 
 // A fake child process that emits a scripted result on next tick.
@@ -626,6 +669,8 @@ test('no-mux: forward spawns a persistent -N -L child; cancel + close kill it', 
   assert.ok(tunnels[0].args.includes('UserKnownHostsFile=/tmp/korgo-known-hosts'))
   assert.ok(tunnels[0].args.includes('GlobalKnownHostsFile=/dev/null'))
   assert.ok(tunnels[0].args.includes('UpdateHostKeys=no'))
+  assert.ok(tunnels[0].args.includes('ForwardAgent=no'))
+  assert.ok(tunnels[0].args.includes('IdentityAgent=none'))
   assert.ok(!tunnels[0].args.includes('StrictHostKeyChecking=accept-new'))
 
   await conn.cancelForward(localPort, 9119)
