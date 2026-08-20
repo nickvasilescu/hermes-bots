@@ -12,13 +12,40 @@ export const BOT_TEMPLATE_REF = 'system/hermes-agent@1.0.0'
 export const BOT_UPDATE_POLICY = 'source-release' as const
 
 export type DesktopProduct = 'bot' | 'hermes'
+export type DesktopSku = DesktopProduct | 'bot-ssh-only'
+
+function resolveDesktopSku(sku: string | undefined, product: string | undefined): DesktopSku {
+  if (sku === 'bot-ssh-only') {
+    return 'bot-ssh-only'
+  }
+
+  return product === 'bot' || sku === 'bot' ? 'bot' : 'hermes'
+}
+
+/**
+ * Captured once at module initialization. Production esbuild replaces the
+ * environment reads with string literals, so launch-time environment changes
+ * cannot widen a packaged SKU's product policy.
+ */
+export const DESKTOP_SKU: DesktopSku = resolveDesktopSku(
+  process.env.HERMES_DESKTOP_SKU,
+  process.env.HERMES_DESKTOP_PRODUCT
+)
+
+export function desktopSku(): DesktopSku {
+  return DESKTOP_SKU
+}
 
 export function desktopProduct(): DesktopProduct {
-  return process.env.HERMES_DESKTOP_PRODUCT === 'bot' ? 'bot' : 'hermes'
+  return DESKTOP_SKU === 'hermes' ? 'hermes' : 'bot'
 }
 
 export function isBotProduct(): boolean {
   return desktopProduct() === 'bot'
+}
+
+export function isSshOnlyProduct(): boolean {
+  return DESKTOP_SKU === 'bot-ssh-only'
 }
 
 /** Bot releases pin their remote template and move client/backend together.

@@ -42,6 +42,14 @@ const debugEntry = (command: string, env: Record<string, string>) =>
     ? path.resolve(import.meta.dirname, './src/debug/dev-only.ts')
     : path.resolve(import.meta.dirname, './src/debug/dev-only.noop.ts')
 
+const desktopSku = (): 'hermes' | 'bot' | 'bot-ssh-only' => {
+  if (process.env.VITE_HERMES_DESKTOP_SKU === 'bot-ssh-only') return 'bot-ssh-only'
+  if (process.env.VITE_HERMES_DESKTOP_SKU === 'bot' || process.env.VITE_HERMES_DESKTOP_PRODUCT === 'bot') {
+    return 'bot'
+  }
+  return 'hermes'
+}
+
 // The emoji picker (frimousse) fetches `<emojibaseUrl>/<locale>/data.json` at
 // runtime. Its default is a CDN; Electron must work offline, so serve the
 // bundled emojibase-data package at a stable local path instead — middleware
@@ -80,97 +88,109 @@ const emojibaseAssets = () => ({
   }
 })
 
-export default defineConfig(({ command }) => ({
-  base: './',
-  plugins: [react(), tailwindcss(), emojibaseAssets()],
-  css: {
-    // Pin an explicit (empty) PostCSS config. Tailwind is handled entirely by
-    // `@tailwindcss/vite`, so the renderer needs no PostCSS plugins — and
-    // without this, Vite's `postcss-load-config` walks UP the filesystem
-    // looking for a stray `postcss.config.*` / `tailwind.config.*`. The desktop
-    // build runs from inside the user's home tree (e.g.
-    // `C:\Users\<name>\AppData\Local\hermes\hermes-agent\apps\desktop`), so an
-    // unrelated Tailwind v3 config higher up the tree gets picked up and
-    // reprocesses our v4 stylesheet, failing the build with
-    // "`@layer base` is used but no matching `@tailwind base` directive is
-    // present." Pinning the config makes the build hermetic.
-    postcss: { plugins: [] }
-  },
-  build: {
-    // The renderer intentionally ships FEW chunks (not one, not thousands):
-    //   · `codeSplitting: false` (the old setup) inlines every `lazy()` /
-    //     dynamic import into the entry, so heavyweight lazy-only deps
-    //     (mermaid, shiki grammars, katex) are parsed + evaluated on every
-    //     cold start even though nothing rendered them. By the time the
-    //     bundle hit ~28 MB that eval was ~1s of launch on an M-series.
-    //   · Default splitting emits a chunk per shiki grammar/theme — thousands
-    //     of files, which electron-builder OOMs scanning (#38888).
-    // `advancedChunks` is the middle ground: heavyweight libraries merge into
-    // a handful of named vendor chunks loaded on first use, app-level dynamic
-    // imports stay lazy, and the file count stays in the tens.
-    chunkSizeWarningLimit: 25000,
-    rolldownOptions: {
-      output: {
-        advancedChunks: {
-          groups: [
-            // Shared foundations FIRST (first match wins): an unmatched
-            // module shared by the entry and a heavy chunk gets merged INTO
-            // the heavy chunk, and the entry then statically imports 19 MB of
-            // shiki just to reach react/hast utils — putting the heavy chunk
-            // right back on the boot path.
-            { name: 'vendor-react', test: /node_modules[\\/](react|react-dom|scheduler|react-router)[\\/]/ },
-            {
-              name: 'vendor-md',
-              test: /node_modules[\\/](property-information|hast-util-[^\\/]+|mdast-util-[^\\/]+|micromark[^\\/]*|unist-util-[^\\/]+|vfile[^\\/]*|unified|stringify-entities|space-separated-tokens|comma-separated-tokens|zwitch|html-void-elements|devlop|style-to-js|style-to-object|clsx)[\\/]/
-            },
-            // Shared utility packages the entry ALSO uses — kept out of the
-            // heavy groups for the same boot-path reason.
-            {
-              name: 'vendor-util',
-              test: /node_modules[\\/](lodash-es|es-toolkit|uuid|dayjs|d3-array|d3-color|d3-force|d3-interpolate|d3-time[^\\/]*|dompurify|stylis)[\\/]/
-            },
-            // One chunk per heavyweight, lazy-only library family.
-            // @streamdown/code lives WITH shiki because it statically imports
-            // the full shiki bundle.
-            {
-              name: 'mermaid',
-              test: /node_modules[\\/](mermaid|cytoscape|dagre|khroma|elkjs|d3|d3-[^\\/]+|@mermaid-js)[\\/]/
-            },
-            {
-              name: 'shiki',
-              test: /node_modules[\\/](shiki|@shikijs|react-shiki|@streamdown[\\/]code|oniguruma-to-es|oniguruma-parser|regex(-[^\\/]+)?)[\\/]/
-            },
-            { name: 'katex', test: /node_modules[\\/]katex[\\/]/ }
-          ]
+export default defineConfig(({ command }) => {
+  const sku = desktopSku()
+  const linkTitleClient = path.resolve(
+    import.meta.dirname,
+    sku === 'bot-ssh-only' ? './src/lib/link-title-client.disabled.ts' : './src/lib/link-title-client.full.ts'
+  )
+  return {
+    base: './',
+    plugins: [react(), tailwindcss(), emojibaseAssets()],
+    define: {
+      'import.meta.env.VITE_HERMES_DESKTOP_SKU': JSON.stringify(sku),
+      'import.meta.env.VITE_HERMES_DESKTOP_PRODUCT': JSON.stringify(sku === 'hermes' ? 'hermes' : 'bot')
+    },
+    css: {
+      // Pin an explicit (empty) PostCSS config. Tailwind is handled entirely by
+      // `@tailwindcss/vite`, so the renderer needs no PostCSS plugins — and
+      // without this, Vite's `postcss-load-config` walks UP the filesystem
+      // looking for a stray `postcss.config.*` / `tailwind.config.*`. The desktop
+      // build runs from inside the user's home tree (e.g.
+      // `C:\Users\<name>\AppData\Local\hermes\hermes-agent\apps\desktop`), so an
+      // unrelated Tailwind v3 config higher up the tree gets picked up and
+      // reprocesses our v4 stylesheet, failing the build with
+      // "`@layer base` is used but no matching `@tailwind base` directive is
+      // present." Pinning the config makes the build hermetic.
+      postcss: { plugins: [] }
+    },
+    build: {
+      // The renderer intentionally ships FEW chunks (not one, not thousands):
+      //   · `codeSplitting: false` (the old setup) inlines every `lazy()` /
+      //     dynamic import into the entry, so heavyweight lazy-only deps
+      //     (mermaid, shiki grammars, katex) are parsed + evaluated on every
+      //     cold start even though nothing rendered them. By the time the
+      //     bundle hit ~28 MB that eval was ~1s of launch on an M-series.
+      //   · Default splitting emits a chunk per shiki grammar/theme — thousands
+      //     of files, which electron-builder OOMs scanning (#38888).
+      // `advancedChunks` is the middle ground: heavyweight libraries merge into
+      // a handful of named vendor chunks loaded on first use, app-level dynamic
+      // imports stay lazy, and the file count stays in the tens.
+      chunkSizeWarningLimit: 25000,
+      rolldownOptions: {
+        output: {
+          advancedChunks: {
+            groups: [
+              // Shared foundations FIRST (first match wins): an unmatched
+              // module shared by the entry and a heavy chunk gets merged INTO
+              // the heavy chunk, and the entry then statically imports 19 MB of
+              // shiki just to reach react/hast utils — putting the heavy chunk
+              // right back on the boot path.
+              { name: 'vendor-react', test: /node_modules[\\/](react|react-dom|scheduler|react-router)[\\/]/ },
+              {
+                name: 'vendor-md',
+                test: /node_modules[\\/](property-information|hast-util-[^\\/]+|mdast-util-[^\\/]+|micromark[^\\/]*|unist-util-[^\\/]+|vfile[^\\/]*|unified|stringify-entities|space-separated-tokens|comma-separated-tokens|zwitch|html-void-elements|devlop|style-to-js|style-to-object|clsx)[\\/]/
+              },
+              // Shared utility packages the entry ALSO uses — kept out of the
+              // heavy groups for the same boot-path reason.
+              {
+                name: 'vendor-util',
+                test: /node_modules[\\/](lodash-es|es-toolkit|uuid|dayjs|d3-array|d3-color|d3-force|d3-interpolate|d3-time[^\\/]*|dompurify|stylis)[\\/]/
+              },
+              // One chunk per heavyweight, lazy-only library family.
+              // @streamdown/code lives WITH shiki because it statically imports
+              // the full shiki bundle.
+              {
+                name: 'mermaid',
+                test: /node_modules[\\/](mermaid|cytoscape|dagre|khroma|elkjs|d3|d3-[^\\/]+|@mermaid-js)[\\/]/
+              },
+              {
+                name: 'shiki',
+                test: /node_modules[\\/](shiki|@shikijs|react-shiki|@streamdown[\\/]code|oniguruma-to-es|oniguruma-parser|regex(-[^\\/]+)?)[\\/]/
+              },
+              { name: 'katex', test: /node_modules[\\/]katex[\\/]/ }
+            ]
+          }
         }
       }
-    }
-  },
-  resolve: {
-    alias: {
-      '@/debug/dev-only': debugEntry(command, process.env as Record<string, string>),
-      '@': path.resolve(import.meta.dirname, './src'),
-      '@bot-mode/plugin': botModePlugin,
-      '@hermes/plugin-sdk': path.resolve(import.meta.dirname, './src/sdk/index.ts'),
-      '@hermes/shared/billing': path.resolve(import.meta.dirname, '../shared/src/billing-types.ts'),
-      '@hermes/shared': path.resolve(import.meta.dirname, '../shared/src'),
-      react: path.resolve(import.meta.dirname, '../../node_modules/react'),
-      'react-dom': path.resolve(import.meta.dirname, '../../node_modules/react-dom'),
-      'react/jsx-dev-runtime': path.resolve(import.meta.dirname, '../../node_modules/react/jsx-dev-runtime.js'),
-      'react/jsx-runtime': path.resolve(import.meta.dirname, '../../node_modules/react/jsx-runtime.js')
     },
-    dedupe: ['react', 'react-dom', 'react-router']
-  },
-  server: {
-    host: '127.0.0.1',
-    port: 5174,
-    strictPort: true,
-    fs: {
-      allow: fsAllow
+    resolve: {
+      alias: {
+        '@desktop/link-title-client': linkTitleClient,
+        '@/debug/dev-only': debugEntry(command, process.env as Record<string, string>),
+        '@': path.resolve(import.meta.dirname, './src'),
+        '@bot-mode/plugin': botModePlugin,
+        '@hermes/plugin-sdk': path.resolve(import.meta.dirname, './src/sdk/index.ts'),
+        '@hermes/shared/billing': path.resolve(import.meta.dirname, '../shared/src/billing-types.ts'),
+        '@hermes/shared': path.resolve(import.meta.dirname, '../shared/src'),
+        react: path.resolve(import.meta.dirname, '../../node_modules/react'),
+        'react-dom': path.resolve(import.meta.dirname, '../../node_modules/react-dom'),
+        'react/jsx-dev-runtime': path.resolve(import.meta.dirname, '../../node_modules/react/jsx-dev-runtime.js'),
+        'react/jsx-runtime': path.resolve(import.meta.dirname, '../../node_modules/react/jsx-runtime.js')
+      },
+      dedupe: ['react', 'react-dom', 'react-router']
+    },
+    server: {
+      host: '127.0.0.1',
+      port: 5174,
+      strictPort: true,
+      fs: {
+        allow: fsAllow
+      }
+    },
+    preview: {
+      host: '127.0.0.1',
+      port: 4174
     }
-  },
-  preview: {
-    host: '127.0.0.1',
-    port: 4174
   }
-}))
+})

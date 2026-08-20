@@ -29,11 +29,26 @@ const external = ['electron', 'node-pty', 'get-windows', 'fs']
 // behaves like a packaged build. Dev bundles (`--dev`) leave the env alone
 // so HERMES_DESKTOP_DEV_SERVER / source-tree resolution keep working.
 const isDev = process.argv.includes('--dev')
+const sku =
+  process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only'
+    ? 'bot-ssh-only'
+    : process.env.HERMES_DESKTOP_SKU === 'bot' || process.env.HERMES_DESKTOP_PRODUCT === 'bot'
+      ? 'bot'
+      : 'hermes'
+const linkTitleIntegration = resolve(
+  root,
+  sku === 'bot-ssh-only' ? 'electron/link-title-integration.disabled.ts' : 'electron/link-title-integration.full.ts'
+)
+const alias = { './link-title-integration': linkTitleIntegration }
 const define = isDev
   ? {}
-  : { 'process.env.HERMES_DESKTOP_IS_PACKAGED': JSON.stringify(true) }
+  : {
+      'process.env.HERMES_DESKTOP_IS_PACKAGED': JSON.stringify(true),
+      'process.env.HERMES_DESKTOP_SKU': JSON.stringify(sku),
+      'process.env.HERMES_DESKTOP_PRODUCT': JSON.stringify(sku === 'hermes' ? 'hermes' : 'bot')
+    }
 
-if (process.env.HERMES_DESKTOP_PRODUCT === 'bot') {
+if (!isDev && sku !== 'hermes') {
   define['process.env.HERMES_DESKTOP_PRODUCT'] = JSON.stringify('bot')
   define['process.env.HERMES_DESKTOP_APP_NAME'] = JSON.stringify('Korgo Bot')
 }
@@ -47,11 +62,12 @@ await build({
   target: 'node20',
   outfile: mainOut,
   external,
+  alias,
   banner: {
-    js: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
+    js: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);"
   },
   define,
-  logLevel: 'info',
+  logLevel: 'info'
 })
 console.log(`bundled ${mainOut}${isDev ? ' (dev)' : ''}`)
 
@@ -64,7 +80,8 @@ await build({
   target: 'node20',
   outfile: preloadOut,
   external,
+  alias,
   define,
-  logLevel: 'info',
+  logLevel: 'info'
 })
 console.log(`bundled ${preloadOut}${isDev ? ' (dev)' : ''}`)

@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
   readonly VITE_HERMES_DESKTOP_PRODUCT?: string
+  readonly VITE_HERMES_DESKTOP_SKU?: 'hermes' | 'bot' | 'bot-ssh-only'
 }
 
 interface ImportMeta {
