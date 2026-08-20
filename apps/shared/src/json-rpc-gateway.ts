@@ -43,6 +43,17 @@ export interface JsonRpcFrame {
 
 export type WebSocketLike = WebSocket
 
+function isWebSocketLike(value: unknown): value is WebSocketLike {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      typeof (value as WebSocketLike).addEventListener === 'function' &&
+      typeof (value as WebSocketLike).removeEventListener === 'function' &&
+      typeof (value as WebSocketLike).send === 'function' &&
+      typeof (value as WebSocketLike).close === 'function'
+  )
+}
+
 type PendingCall = {
   reject: (error: Error) => void
   resolve: (value: unknown) => void
@@ -97,29 +108,31 @@ export class JsonRpcGatewayClient {
     return this.state
   }
 
-  async connect(wsUrl: string): Promise<void> {
+  async connect(target: string | WebSocketLike): Promise<void> {
     // Refuse garbage; WebSocket coerces non-strings into
     // `ws://<origin>/[object%20Object]` (#68250 stale-emit boot loop).
     const invalidUrl = () => {
-      const got = typeof wsUrl === 'string' ? JSON.stringify(wsUrl) : `type "${typeof wsUrl}"`
+      const got = typeof target === 'string' ? JSON.stringify(target) : `type "${typeof target}"`
 
       return new Error(`gateway connect() requires a ws:// or wss:// URL string, got ${got}`)
     }
 
-    if (typeof wsUrl !== 'string') {
+    if (typeof target !== 'string' && !isWebSocketLike(target)) {
       throw invalidUrl()
     }
 
-    let url: URL
+    if (typeof target === 'string') {
+      let url: URL
 
-    try {
-      url = new URL(wsUrl)
-    } catch {
-      throw invalidUrl()
-    }
+      try {
+        url = new URL(target)
+      } catch {
+        throw invalidUrl()
+      }
 
-    if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
-      throw invalidUrl()
+      if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+        throw invalidUrl()
+      }
     }
 
     if (this.socket?.readyState === WebSocket.OPEN || this.state === 'connecting') {
@@ -128,7 +141,8 @@ export class JsonRpcGatewayClient {
 
     this.setState('connecting')
 
-    const socket = this.options.socketFactory?.(wsUrl) ?? new WebSocket(wsUrl)
+    const socket =
+      typeof target === 'string' ? (this.options.socketFactory?.(target) ?? new WebSocket(target)) : target
     this.socket = socket
 
     socket.addEventListener('message', message => {

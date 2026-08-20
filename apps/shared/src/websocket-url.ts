@@ -7,6 +7,9 @@ export interface GatewayWsConnection {
    * it and require a just-in-time URL from the native process. */
   wsUrl?: string
   requireFreshWsUrl?: boolean
+  /** The native process owns the authenticated socket; renderer receives only
+   * a narrow event/send bridge. */
+  useGatewayProxy?: boolean
 }
 
 export interface ResolveGatewayWsUrlDeps {

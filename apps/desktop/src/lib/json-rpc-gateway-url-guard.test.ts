@@ -62,4 +62,13 @@ describe('JsonRpcGatewayClient connect() URL guard', () => {
       expect(client.connectionState).toBe('open')
     }
   })
+
+  it('accepts an already-authorized native transport without a URL', async () => {
+    const client = new JsonRpcGatewayClient()
+    const transport = new FakeSocket() as unknown as WebSocket
+
+    await client.connect(transport)
+
+    expect(client.connectionState).toBe('open')
+  })
 })
