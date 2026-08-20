@@ -212,6 +212,12 @@ test('chatWindowWebPreferences passes the preload path through and keeps the har
   assert.equal(prefs.nodeIntegration, false)
 })
 
+test('chatWindowWebPreferences can close DevTools for a hardened packaged SKU', () => {
+  const prefs = chatWindowWebPreferences('/some/preload.cjs', { devTools: false })
+
+  assert.equal(prefs.devTools, false)
+})
+
 test('chatWindowWebPreferences allows autoplay so wake-started voice speaks its first reply', () => {
   // Regression: Chromium's default autoplay policy suspends audio until a user
   // gesture. A wake-word-started voice conversation has no preceding click, so

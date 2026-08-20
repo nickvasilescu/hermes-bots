@@ -37,14 +37,14 @@ const SESSION_WINDOW_MIN_HEIGHT = 620
 // session is silent" bug. Manual voice-start worked only because the button
 // click counted as the gesture. This is a native app the user deliberately
 // launched; there is no drive-by-autoplay concern to protect against.
-function chatWindowWebPreferences(preloadPath: string) {
+function chatWindowWebPreferences(preloadPath: string, { devTools = true }: { devTools?: boolean } = {}) {
   return {
     preload: preloadPath,
     contextIsolation: true,
     webviewTag: true,
     sandbox: true,
     nodeIntegration: false,
-    devTools: true,
+    devTools,
     autoplayPolicy: 'no-user-gesture-required' as const
   }
 }
