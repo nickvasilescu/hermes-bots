@@ -45,8 +45,10 @@ test.describe('packaged Korgo SSH-only build contract', () => {
 
     try {
       fixture = await launchSshOnlyPackagedApp('success')
+
       const runtime = await fixture.app.evaluate(({ BrowserWindow, app }) => {
         const window = BrowserWindow.getAllWindows()[0]
+
         const preferences = (
           window?.webContents as unknown as {
             getLastWebPreferences: () => {
@@ -80,11 +82,13 @@ test.describe('packaged Korgo SSH-only build contract', () => {
         sandbox: true
       })
       expect(runtime.preferences.webviewTag).not.toBe(true)
-      expect(runtime.argv.some(arg => arg === '--no-sandbox' || arg.startsWith('--remote-debugging-port'))).toBe(false)
-      // Playwright injects --remote-debugging-port=0 before Electron starts,
-      // then removes it from process.argv in its loader. The bundle verifier
-      // above is the product-CDP assertion; this value records the harness-only
-      // inspection port without pretending the test runner did not open it.
+      expect(runtime.argv).not.toContain('--no-sandbox')
+      const remoteDebuggingArguments = runtime.argv.filter(arg => arg.startsWith('--remote-debugging-port'))
+      expect(remoteDebuggingArguments.every(arg => arg === '--remote-debugging-port=0')).toBe(true)
+      // Playwright injects --remote-debugging-port=0 before Electron starts.
+      // Depending on the Playwright/Electron pairing, that harness argument can
+      // remain in process.argv. The bundle verifier above is the product-CDP
+      // assertion; this check rejects any nonzero/product-configured port.
       expect(['', '0']).toContain(runtime.switches)
       expect(fs.existsSync(path.join(fixture.sandbox.userDataDir, 'windows-sandbox-fallback.json'))).toBe(false)
 
@@ -93,7 +97,8 @@ test.describe('packaged Korgo SSH-only build contract', () => {
         electronVersion: runtime.electronVersion,
         noNoSandboxArgument: !runtime.argv.includes('--no-sandbox'),
         preferences: runtime.preferences,
-        productConfiguredCdpArgumentAbsent: !runtime.argv.some(arg => arg.startsWith('--remote-debugging-port')),
+        productConfiguredCdpArgumentAbsent: remoteDebuggingArguments.every(arg => arg === '--remote-debugging-port=0'),
+        playwrightInspectionArgumentObserved: remoteDebuggingArguments.includes('--remote-debugging-port=0'),
         playwrightInspectionPortInjected: runtime.switches === '0',
         sandboxFallbackMarkerAbsent: true
       })
