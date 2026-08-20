@@ -10901,7 +10901,16 @@ def _respond(rid, params, key, *, allow_expired=False):
 @method("config.set")
 def _(rid, params: dict) -> dict:
     key, value = params.get("key", ""), params.get("value", "")
+    session_id_present = "session_id" in params
     session = _sessions.get(params.get("session_id", ""))
+
+    # A caller that explicitly targets a session must never fall through to
+    # the global config path when that runtime id is stale or fabricated.  In
+    # particular, Desktop's per-session model/fast/reasoning controls all use
+    # this shape; treating an unknown id as "no session requested" turns a
+    # renderer typo (or compromise) into a persistent Mini-wide mutation.
+    if session_id_present and session is None:
+        return _err(rid, 4001, "session not found")
 
     if key == "model":
         try:

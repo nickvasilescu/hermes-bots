@@ -106,6 +106,16 @@ class TestGetProfileDir:
         result = get_profile_dir("default")
         assert result == tmp_path / ".hermes"
 
+    @pytest.mark.parametrize(
+        "name",
+        ["../../.ssh", "/etc", {"name": "work"}, "root", "tmp"],
+    )
+    def test_rejects_unsafe_and_reserved_names_before_path_resolution(
+        self, profile_env, name
+    ):
+        with pytest.raises(ValueError):
+            get_profile_dir(name)
+
 
 # ===================================================================
 # TestCreateProfile
@@ -935,6 +945,5 @@ class TestProfilesToServe:
 
         assert set(serve) == {"default", "worker"}
         assert serve["worker"] == get_profile_dir("worker")
-
 
 

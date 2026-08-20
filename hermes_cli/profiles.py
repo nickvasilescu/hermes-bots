@@ -374,6 +374,7 @@ def validate_alias_name(name: str) -> None:
 def get_profile_dir(name: str) -> Path:
     """Resolve a profile name to its HERMES_HOME directory."""
     canon = normalize_profile_name(name)
+    validate_profile_name(canon)
     if canon == "default":
         return _get_default_hermes_home()
     return _get_profiles_root() / canon
