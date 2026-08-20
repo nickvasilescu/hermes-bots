@@ -7,6 +7,7 @@ import { getHermesConfigDefaults, getHermesConfigRecord, saveHermesConfig } from
 import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { Archive, BarChart3, Bell, Download, Globe, Info, Keyboard, KeyRound, RefreshCw, Settings2, Upload, Wrench, Zap } from '@/lib/icons'
+import { isSshOnlyProduct } from '@/lib/product'
 import { notifyError } from '@/store/notifications'
 
 import { openConnectors } from '../connectors/store'
@@ -29,7 +30,7 @@ import { PROVIDER_VIEWS, ProvidersSettings, type ProviderView } from './provider
 import { SessionsSettings } from './sessions-settings'
 import type { SettingsPageProps, SettingsView as SettingsViewId } from './types'
 
-const SETTINGS_VIEWS: readonly SettingsViewId[] = [
+const FULL_SETTINGS_VIEWS: readonly SettingsViewId[] = [
   ...SECTIONS.map(s => `config:${s.id}` as SettingsViewId),
   'providers',
   'gateway',
@@ -42,10 +43,39 @@ const SETTINGS_VIEWS: readonly SettingsViewId[] = [
   'about'
 ]
 
+const SSH_ONLY_CONFIG_SECTION_IDS = new Set(['appearance', 'chat'])
+const SSH_ONLY_CONFIG_SECTIONS = SECTIONS.filter(section => SSH_ONLY_CONFIG_SECTION_IDS.has(section.id))
+
+const SSH_ONLY_SETTINGS_VIEWS: readonly SettingsViewId[] = [
+  'config:appearance',
+  'config:chat',
+  'keybinds',
+  'notifications',
+  'sessions',
+  'about'
+]
+
+/** Settings reachable in a compiled SKU. Kept pure so deep-link policy is
+ * testable independently from the navigation that happens to render it. */
+export function settingsViewsForProduct(sshOnly: boolean): readonly SettingsViewId[] {
+  return sshOnly ? SSH_ONLY_SETTINGS_VIEWS : FULL_SETTINGS_VIEWS
+}
+
+export function resolveSettingsView(raw: string | null, sshOnly: boolean): SettingsViewId {
+  const views = settingsViewsForProduct(sshOnly)
+  const fallback: SettingsViewId = sshOnly ? 'config:appearance' : 'config:model'
+
+  return raw && views.includes(raw as SettingsViewId) ? (raw as SettingsViewId) : fallback
+}
+
 export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: SettingsPageProps) {
   const { t } = useI18n()
   const navigate = useNavigate()
   const { hash, pathname, search } = useLocation()
+  const sshOnly = isSshOnlyProduct()
+  const settingsViews = settingsViewsForProduct(sshOnly)
+  const fallbackView = resolveSettingsView(null, sshOnly)
+  const settingsSections = sshOnly ? SSH_ONLY_CONFIG_SECTIONS : SECTIONS
 
   // MCP moved out of Settings into Capabilities (/skills?tab=mcp). Keep old
   // `/settings?tab=mcp` deep links working — `useRouteEnumParam` would silently
@@ -54,19 +84,39 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
   useEffect(() => {
     const params = new URLSearchParams(search)
 
-    if (params.get('tab') === 'mcp') {
+    const requestedTab = params.get('tab')
+
+    if (requestedTab === 'mcp') {
       const server = params.get('server')
       const suffix = server ? `&server=${encodeURIComponent(server)}` : ''
       navigate(`${SKILLS_ROUTE}?tab=mcp${suffix}`, { replace: true })
+
+      return
     }
 
-    if (params.get('tab') === 'plugins') {
+    if (requestedTab === 'plugins' && !sshOnly) {
       openConnectors()
       onClose()
-    }
-  }, [navigate, onClose, search])
 
-  const [activeView, setActiveView] = useRouteEnumParam('tab', SETTINGS_VIEWS, 'config:model' as SettingsViewId)
+      return
+    }
+
+    // Invalid and forbidden tabs resolve to the SKU's safe fallback in the
+    // current render. Canonicalize the URL too, dropping subordinate params so
+    // a copied deep link cannot retain credential/provisioning intent.
+    if (requestedTab && !settingsViews.includes(requestedTab as SettingsViewId)) {
+      params.delete('tab')
+      params.delete('pview')
+      params.delete('kview')
+      params.delete('field')
+      params.delete('server')
+
+      const qs = params.toString()
+      navigate({ hash, pathname, search: qs ? `?${qs}` : '' }, { replace: true })
+    }
+  }, [hash, navigate, onClose, pathname, search, settingsViews, sshOnly])
+
+  const [activeView, setActiveView] = useRouteEnumParam('tab', settingsViews, fallbackView)
   // Providers subnav (Accounts vs API keys) lives in its own param so each
   // sub-view is deep-linkable and survives a refresh.
   const [providerView, setProviderView] = useRouteEnumParam<ProviderView>('pview', PROVIDER_VIEWS, 'accounts')
@@ -133,7 +183,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
 
   const navGroups: OverlayNavGroup[] = useMemo(
     () => [
-      ...SECTIONS.map(s => {
+      ...settingsSections.map(s => {
         const view = `config:${s.id}` as SettingsViewId
 
         return {
@@ -241,11 +291,11 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
         label: t.settings.nav.about,
         onSelect: () => setActiveView('about')
       }
-    ],
-    [activeView, keysView, providerView, t, setActiveView, openProviderView, openKeysView]
+    ].filter(group => settingsViews.includes(group.id as SettingsViewId)),
+    [activeView, keysView, providerView, t, setActiveView, openProviderView, openKeysView, settingsSections, settingsViews]
   )
 
-  const navFooter = (
+  const navFooter = sshOnly ? null : (
     <>
       <Tip label={t.settings.exportConfig}>
         <OverlayIconButton onClick={() => void exportConfig()}>
@@ -311,8 +361,10 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
             <NotificationsSettings />
           ) : activeView === 'billing' ? (
             <BillingSettings />
-          ) : (
+          ) : activeView === 'sessions' ? (
             <SessionsSettings />
+          ) : (
+            <AppearanceSettings />
           )}
         </OverlayMain>
       </OverlaySplitLayout>

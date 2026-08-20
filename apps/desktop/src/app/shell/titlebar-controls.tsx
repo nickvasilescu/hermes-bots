@@ -10,6 +10,7 @@ import { Tip, TipKeybindLabel } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { isBotProduct } from '@/lib/product'
+import { allowsDesktopCapability } from '@/lib/product-capabilities'
 import { cn } from '@/lib/utils'
 import { $hapticsMuted, toggleHapticsMuted } from '@/store/haptics'
 import { toggleHud } from '@/store/hud'
@@ -112,6 +113,7 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
   const fileBrowserOpen = useStore($fileBrowserOpen)
   const orgoDesktopOpen = useStore($orgoDesktopOpen)
   const sidebarOpen = useStore($sidebarOpen)
+  const orgoDesktopAllowed = allowsDesktopCapability('allowOrgo')
 
   const toggleHaptics = () => {
     if (!hapticsMuted) {
@@ -224,14 +226,20 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
       actionId: 'nav.settings',
       icon: <TitlebarIcon name="settings-gear" />,
       id: 'settings',
-      label: 'Configure computer',
+      label: orgoDesktopAllowed ? 'Configure computer' : t.titlebar.openSettings,
       onSelect: () => {
         triggerHaptic('open')
-        requestOrgoDesktopSettings()
+
+        if (orgoDesktopAllowed) {
+          requestOrgoDesktopSettings()
+        } else {
+          onOpenSettings()
+        }
       }
     },
     {
       active: orgoDesktopOpen,
+      hidden: !orgoDesktopAllowed,
       icon: <TitlebarIcon name={orgoDesktopOpen ? 'vm-running' : 'vm-outline'} />,
       id: 'computer',
       label: orgoDesktopOpen ? t.titlebar.hideComputer : t.titlebar.showComputer,

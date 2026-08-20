@@ -45,6 +45,7 @@ import { NEW_SESSION_TITLE, sessionTitle as storedSessionTitle } from '@/lib/cha
 import { Download, FileText, LayoutDashboard, Monitor, PanelBottom, Terminal, Upload, Zap } from '@/lib/icons'
 import { type KeybindContribution, KEYBINDS_AREA } from '@/lib/keybinds/actions'
 import { isBotProduct } from '@/lib/product'
+import { allowsDesktopCapability } from '@/lib/product-capabilities'
 import { setYoloEnabled } from '@/lib/yolo-session'
 import { pruneComposerPopoutZones } from '@/store/composer-popout'
 import {
@@ -112,6 +113,8 @@ const renderWorkspacePane = () => <WiredPane part="chatRoutes" />
 // Boot-hidden panes mount behind display:none (instant-toggle contract) — defer
 // them to idle so they're off the first-paint path, warm before reveal.
 const idle = (node: ReactElement) => <IdleMount>{node}</IdleMount>
+const ORGO_DESKTOP_ALLOWED = allowsDesktopCapability('allowOrgo')
+const CONNECTORS_ALLOWED = allowsDesktopCapability('allowComposio')
 // The main tab carries the same session context menu as tile tabs (targets
 // the loaded primary session; no menu on a fresh draft).
 const wrapWorkspaceTab = (tab: ReactElement) => <WorkspaceTabMenu>{tab}</WorkspaceTabMenu>
@@ -662,16 +665,18 @@ registry.register(
 // Computer details are fixed app chrome, not a tile. ContribController mounts
 // the rail outside the layout tree so terminals, previews, and persisted user
 // layouts can never add a tab strip or steal part of its height.
-registry.register(
-  paletteToggle({
-    id: 'computer.toggle',
-    label: 'Toggle computer',
-    icon: Monitor,
-    keywords: ['computer', 'desktop', 'orgo', 'vnc', 'remote'],
-    get: () => $orgoDesktopOpen.get(),
-    set: setOrgoDesktopOpen
-  })
-)
+if (ORGO_DESKTOP_ALLOWED) {
+  registry.register(
+    paletteToggle({
+      id: 'computer.toggle',
+      label: 'Toggle computer',
+      icon: Monitor,
+      keywords: ['computer', 'desktop', 'orgo', 'vnc', 'remote'],
+      get: () => $orgoDesktopOpen.get(),
+      set: setOrgoDesktopOpen
+    })
+  )
+}
 
 // YOLO (dangerous-command approval bypass) is a status-bar zap and a /yolo
 // command; ⌘K is the third door onto the SAME store function, so a user who
@@ -833,7 +838,7 @@ export function ContribController() {
 
             <div className="flex min-h-0 min-w-0 flex-1">
               <LayoutTreeRoot />
-              {orgoDesktopOpen ? (
+              {ORGO_DESKTOP_ALLOWED && orgoDesktopOpen ? (
                 <ResizableComputerRail>
                   <OrgoDesktopPane />
                 </ResizableComputerRail>
@@ -842,7 +847,7 @@ export function ContribController() {
 
             {/* "Close running tab?" — the busy/input-blocked tile close gate. */}
             <SessionTileCloseConfirm />
-            <ConnectorsModal />
+            {CONNECTORS_ALLOWED ? <ConnectorsModal /> : null}
 
             {/* The REAL statusbar (model pill, command center, agents, …) with
               statusBar.left/right contributions merged in. Unmounted — not

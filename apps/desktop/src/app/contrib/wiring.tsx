@@ -33,6 +33,7 @@ import { emitGatewayEvent } from '@/contrib/events'
 import { getLatestSessionMessages, triggerCronJob } from '@/hermes'
 import { type ChatMessage, chatMessageText, preserveLocalAssistantErrors, toChatMessages } from '@/lib/chat-messages'
 import { isBotProduct } from '@/lib/product'
+import { allowsDesktopCapability } from '@/lib/product-capabilities'
 import { sessionMessagesSignature } from '@/lib/session-signatures'
 import { isMessagingSource } from '@/lib/session-source'
 import { latestSessionTodos } from '@/lib/todos'
@@ -149,6 +150,14 @@ const ProfilesView = lazy(async () => ({ default: (await import('../profiles')).
 const SettingsView = lazy(async () => ({ default: (await import('../settings')).SettingsView }))
 const StarmapView = lazy(async () => ({ default: (await import('../starmap')).StarmapView }))
 
+const LOCAL_CREDENTIAL_ENTRY_ALLOWED = allowsDesktopCapability('allowLocalCredentialEntry')
+const LOCAL_RUNTIME_ALLOWED = allowsDesktopCapability('allowLocalRuntime')
+
+const BOT_INTEGRATION_SETUP_ALLOWED =
+  LOCAL_CREDENTIAL_ENTRY_ALLOWED ||
+  allowsDesktopCapability('allowOrgo') ||
+  allowsDesktopCapability('allowComposio')
+
 // Surfaces (the four wired panes), the render context + WiredPane, and the
 // WiringActions/WiringApi contracts all live in sibling modules — this file is
 // the controller that assembles them.
@@ -159,9 +168,10 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   const location = useLocation()
   const navigate = useNavigate()
   const botProduct = isBotProduct()
+  const botProviderSetupRequired = botProduct && LOCAL_CREDENTIAL_ENTRY_ALLOWED
 
   const [botProviderSetupReady, setBotProviderSetupReady] = useState(
-    () => !botProduct || isBotProviderSetupReady()
+    () => !botProviderSetupRequired || isBotProviderSetupReady()
   )
 
   const busyRef = useRef(false)
@@ -183,7 +193,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   const currentCwd = useStore($currentCwd)
 
   useEffect(() => {
-    if (!botProduct) {
+    if (!botProviderSetupRequired) {
       return undefined
     }
 
@@ -191,7 +201,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     window.addEventListener(BOT_PROVIDER_SETUP_READY_EVENT, handleReady)
 
     return () => window.removeEventListener(BOT_PROVIDER_SETUP_READY_EVENT, handleReady)
-  }, [botProduct])
+  }, [botProviderSetupRequired])
 
   // eslint-disable-next-line no-restricted-syntax -- one-shot request-seen sentinel, not an atom mirror
   useEffect(() => {
@@ -201,7 +211,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
 
     billingSettingsSeenRef.current = billingSettingsRequest
 
-    if (billingSettingsRequest > 0) {
+    if (billingSettingsRequest > 0 && LOCAL_CREDENTIAL_ENTRY_ALLOWED) {
       navigate(`${SETTINGS_ROUTE}?tab=billing`)
     }
   }, [billingSettingsRequest, navigate])
@@ -324,7 +334,11 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     requestGateway
   })
 
-  const openProviderSettings = useCallback(() => navigate(`${SETTINGS_ROUTE}?tab=providers`), [navigate])
+  const openProviderSettings = useCallback(() => {
+    if (LOCAL_CREDENTIAL_ENTRY_ALLOWED) {
+      navigate(`${SETTINGS_ROUTE}?tab=providers`)
+    }
+  }, [navigate])
 
   // Palette "Keyboard shortcuts" entry dispatches a custom event (contributions
   // don't have router access); listen and navigate to the settings keybinds tab.
@@ -1064,7 +1078,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
       {/* The full real overlay set (mirrors DesktopController's `overlays`). */}
       <RemoteDisplayBanner />
       {!isAuxiliaryWindow() && <DesktopInstallOverlay />}
-      {!isAuxiliaryWindow() && botProviderSetupReady && (
+      {!isAuxiliaryWindow() && LOCAL_CREDENTIAL_ENTRY_ALLOWED && botProviderSetupReady && (
         <DesktopOnboardingOverlay
           enabled={gatewayState === 'open'}
           onCompleted={() => {
@@ -1072,7 +1086,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
             void refreshCurrentModel()
             void queryClient.invalidateQueries({ queryKey: ['model-options'] })
 
-            if (botProduct) {
+            if (botProviderSetupRequired) {
               markBotProviderSetupComplete()
             }
           }}
@@ -1080,17 +1094,21 @@ export function ContribWiring({ children }: { children: ReactNode }) {
           requestGateway={requestGateway}
         />
       )}
-      {!isAuxiliaryWindow() && <BotSetupOverlay enabled={gatewayState === 'open'} requestGateway={requestGateway} />}
+      {!isAuxiliaryWindow() && BOT_INTEGRATION_SETUP_ALLOWED && (
+        <BotSetupOverlay enabled={gatewayState === 'open'} requestGateway={requestGateway} />
+      )}
       <ModelPickerOverlay gateway={gateway || undefined} onSelect={selectModel} profile={activeGatewayProfile} />
       <SessionPickerOverlay onResume={sessionId => openSession(sessionId, navigate)} />
-      <ModelVisibilityOverlay
-        gateway={gateway || undefined}
-        onOpenProviders={openProviderSettings}
-        profile={activeGatewayProfile}
-      />
-      <UpdatesOverlay />
+      {LOCAL_CREDENTIAL_ENTRY_ALLOWED ? (
+        <ModelVisibilityOverlay
+          gateway={gateway || undefined}
+          onOpenProviders={openProviderSettings}
+          profile={activeGatewayProfile}
+        />
+      ) : null}
+      {LOCAL_RUNTIME_ALLOWED ? <UpdatesOverlay /> : null}
       <GatewayConnectingOverlay />
-      <BootFailureOverlay />
+      {LOCAL_RUNTIME_ALLOWED ? <BootFailureOverlay /> : null}
       <CommandPalette />
       <PetGenerateOverlay />
       <SessionSwitcher />

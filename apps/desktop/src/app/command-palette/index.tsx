@@ -56,7 +56,7 @@ import {
   Wrench,
   Zap
 } from '@/lib/icons'
-import { allowsGenericHermesUpdates } from '@/lib/product'
+import { allowsGenericHermesUpdates, isSshOnlyProduct } from '@/lib/product'
 import { normalize } from '@/lib/text'
 import { cn } from '@/lib/utils'
 import { resolveVersionStatus } from '@/lib/version-status'
@@ -430,6 +430,12 @@ const NON_CONFIG_SETTINGS: ReadonlyArray<{
   { icon: Info, keywords: ['version', 'about'], labelKey: 'about', tab: 'about' }
 ]
 
+const SSH_ONLY_PALETTE_SECTIONS = SECTIONS.filter(section => ['appearance', 'chat'].includes(section.id))
+
+const SSH_ONLY_NON_CONFIG_SETTINGS = NON_CONFIG_SETTINGS.filter(entry =>
+  ['about', 'archivedChats'].includes(entry.labelKey)
+)
+
 const THEME_MODES: ReadonlyArray<{ icon: IconComponent; mode: ThemeMode }> = [
   { icon: Sun, mode: 'light' },
   { icon: Moon, mode: 'dark' },
@@ -519,6 +525,9 @@ export function CommandPalette() {
 
 function CommandPaletteBody({ onExited }: { onExited: () => void }) {
   const { t } = useI18n()
+  const sshOnly = isSshOnlyProduct()
+  const settingsSections = sshOnly ? SSH_ONLY_PALETTE_SECTIONS : SECTIONS
+  const nonConfigSettings = sshOnly ? SSH_ONLY_NON_CONFIG_SETTINGS : NON_CONFIG_SETTINGS
   const pendingPage = useStore($commandPalettePage)
   const bindings = useStore($bindings)
   const worktrees = useStore($repoWorktrees)
@@ -920,27 +929,31 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
       {
         heading: cc.settings,
         items: [
-          ...SECTIONS.map(section => ({
+          ...settingsSections.map(section => ({
             icon: section.icon,
             id: `set-config-${section.id}`,
             keywords: ['settings', section.label, settingsSectionLabel(section)],
             label: settingsSectionLabel(section),
             run: go(settingsTab(`config:${section.id}`))
           })),
-          ...NON_CONFIG_SETTINGS.map(entry => ({
+          ...nonConfigSettings.map(entry => ({
             icon: entry.icon,
             id: `set-${entry.tab}`,
             keywords: ['settings', ...(entry.keywords ?? [])],
             label: t.settings.nav[entry.labelKey],
             run: go(settingsTab(entry.tab))
           })),
-          {
-            icon: Plug,
-            id: 'set-connectors',
-            keywords: ['plugins', 'connectors', 'composio', 'apps', 'integrations', 'extensions'],
-            label: t.connectors.title,
-            run: () => openConnectors()
-          }
+          ...(!sshOnly
+            ? [
+                {
+                  icon: Plug,
+                  id: 'set-connectors',
+                  keywords: ['plugins', 'connectors', 'composio', 'apps', 'integrations', 'extensions'],
+                  label: t.connectors.title,
+                  run: () => openConnectors()
+                }
+              ]
+            : [])
         ]
       }
     ]
@@ -952,9 +965,12 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
     contributedItems,
     dismissedAutoProjects,
     go,
+    nonConfigSettings,
     projectTree,
     selectTick,
+    settingsSections,
     settingsSectionLabel,
+    sshOnly,
     t,
     updateVersionLabel
   ])
@@ -1091,7 +1107,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
       })
     }
 
-    const fieldItems = SECTIONS.flatMap(section =>
+    const fieldItems = settingsSections.flatMap(section =>
       section.keys.map(key => ({
         icon: section.icon,
         id: `field-${key}`,
@@ -1149,6 +1165,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
     sessions,
     setMode,
     setTheme,
+    settingsSections,
     settingsSectionLabel,
     t,
     themeName
