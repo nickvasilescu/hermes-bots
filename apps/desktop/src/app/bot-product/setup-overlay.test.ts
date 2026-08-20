@@ -3,6 +3,7 @@ import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getGlobalModelInfo } from '@/hermes'
+import { isSshOnlyProduct } from '@/lib/product'
 
 import { BotSetupOverlay, createFirstBotProfile, formatBotSetupError } from './setup-overlay'
 
@@ -11,7 +12,8 @@ vi.mock('@/hermes', () => ({
 }))
 
 vi.mock('@/lib/product', () => ({
-  isBotProduct: () => true
+  isBotProduct: () => true,
+  isSshOnlyProduct: vi.fn(() => false)
 }))
 
 afterEach(() => {
@@ -58,6 +60,22 @@ describe('first bot profile setup', () => {
 })
 
 describe('bot setup overlay', () => {
+  it('does not expose cloud, provider, Composio, Orgo, or Tailscale setup in the SSH-only SKU', () => {
+    vi.mocked(isSshOnlyProduct).mockReturnValueOnce(true)
+
+    const { container } = render(
+      createElement(BotSetupOverlay, {
+        enabled: true,
+        requestGateway: async <T>() => ({}) as T
+      })
+    )
+
+    expect(container.innerHTML).toBe('')
+    expect(screen.queryByPlaceholderText('Orgo API key')).toBeNull()
+    expect(screen.queryByText(/Tailscale/i)).toBeNull()
+    expect(screen.queryByText(/Composio/i)).toBeNull()
+  })
+
   it('exports a skippable overlay component', () => {
     expect(typeof BotSetupOverlay).toBe('function')
   })
@@ -79,7 +97,7 @@ describe('bot setup overlay', () => {
     const view = render(
       createElement(BotSetupOverlay, {
         enabled: true,
-        requestGateway: async <T,>() => {
+        requestGateway: async <T>() => {
           return {} as T
         }
       })

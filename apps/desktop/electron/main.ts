@@ -80,6 +80,7 @@ import {
   modeIsRemoteLike,
   normalizeRemoteBaseUrl,
   normalizeSshConfig,
+  normalizeSshOnlyConfig,
   normAuthMode,
   pathWithGlobalRemoteProfile,
   profileHasRemoteConnection,
@@ -218,8 +219,10 @@ import {
   applyDesktopProductIdentity,
   desktopAppId,
   desktopAppName,
-  isBotProduct
+  isBotProduct,
+  isSshOnlyProduct
 } from './product'
+import { assertDesktopConnectionMode } from './product-capabilities'
 import { decideProfileDeleteAction, profileNameFromDeleteRequest, resolveRouteProfile } from './profile-delete-routing'
 import { fetchPrimaryProfileSessions } from './profile-session-routing'
 import { createQuickEntryShortcut, quickEntryWindowBounds, sanitizeQuickEntrySettings } from './quick-entry'
@@ -250,6 +253,7 @@ import {
   redactSecrets,
   SshConnection
 } from './ssh-connection'
+import { SSH_ONLY_HOST_KEY_POLICY, SSH_ONLY_IDENTITY_PATH } from './ssh-only-policy'
 import { createStreamThrottle } from './stream-throttle'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
 import { resolveBehindCount, shouldCountCommits } from './update-count'
@@ -1205,6 +1209,7 @@ let bootstrapRepairAttempt = 0
 const MAX_BOOTSTRAP_REPAIR_SOFT_ATTEMPTS = 3
 let connectionConfigCache = null
 let connectionConfigCacheMtime = null
+const pendingSshOnlyConnectionSaves = new Map<string, any>()
 const hermesLog = []
 const previewWatchers = new Map()
 let previewShortcutActive = false
@@ -7574,6 +7579,7 @@ function buildRemoteBlock(remoteUrl, authMode, token, org?: string) {
 }
 
 function coerceDesktopConnectionConfig(input: any = {}, existing = readDesktopConnectionConfig(), options: any = {}) {
+  assertDesktopConnectionMode(String(input.mode || 'local'))
   const persistToken = options.persistToken !== false
   const key = connectionScopeKey(input.profile)
   // 'cloud' and 'remote' both persist a remote-shaped block; 'cloud' is
@@ -7674,7 +7680,7 @@ function coerceDesktopConnectionConfig(input: any = {}, existing = readDesktopCo
 function buildSshBlock(input: any, existingBlock: any = {}) {
   // `??` (not `||`) so an explicit '' (user CLEARED the field) wins over the
   // saved value; only a truly absent (undefined) field inherits.
-  const merged = normalizeSshConfig({
+  const raw = {
     mode: 'ssh',
     host: input.sshHost ?? existingBlock.host,
     user: input.sshUser ?? existingBlock.user,
@@ -7682,7 +7688,11 @@ function buildSshBlock(input: any, existingBlock: any = {}) {
     keyPath: input.sshKeyPath ?? existingBlock.keyPath,
     remoteHermesPath: input.sshRemoteHermesPath ?? existingBlock.remoteHermesPath,
     remoteProfile: input.sshRemoteProfile ?? existingBlock.remoteProfile
-  })
+  }
+
+  const merged = isSshOnlyProduct()
+    ? normalizeSshOnlyConfig(raw, { identityPath: SSH_ONLY_IDENTITY_PATH })
+    : normalizeSshConfig(raw)
 
   if (!merged) {
     throw new Error('SSH host is required.')
@@ -7898,6 +7908,19 @@ function effectiveSshConfigFingerprint(sshConfig) {
 
   const args = ['-G']
 
+  if (isSshOnlyProduct()) {
+    args.push(
+      '-o',
+      `StrictHostKeyChecking=${SSH_ONLY_HOST_KEY_POLICY.strictHostKeyChecking}`,
+      '-o',
+      `UserKnownHostsFile=${SSH_ONLY_HOST_KEY_POLICY.userKnownHostsFile}`,
+      '-o',
+      `GlobalKnownHostsFile=${SSH_ONLY_HOST_KEY_POLICY.globalKnownHostsFile}`,
+      '-o',
+      `UpdateHostKeys=${SSH_ONLY_HOST_KEY_POLICY.updateHostKeys}`
+    )
+  }
+
   if (sshConfig.port) {
     args.push('-p', String(sshConfig.port))
   }
@@ -7913,12 +7936,14 @@ function effectiveSshConfigFingerprint(sshConfig) {
 }
 
 async function bootstrapSshConnection(profile, sshConfig, reuseToken, source) {
-  if (isBotProduct()) {
+  if (isBotProduct() && !isSshOnlyProduct()) {
     try {
       const { apiKey, computerId } = defaultOrgoDesktopCredentials()
       await ensureOrgoComputerRunning(apiKey, computerId)
     } catch (error) {
-      sshRememberLog(`[ssh] could not wake the shared Orgo computer: ${error instanceof Error ? error.message : String(error)}`)
+      sshRememberLog(
+        `[ssh] could not wake the shared Orgo computer: ${error instanceof Error ? error.message : String(error)}`
+      )
     }
   }
 
@@ -7965,7 +7990,8 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
         rememberLog: sshRememberLog,
         ownershipId: sshOwnershipKey(profile),
         scope,
-        effectiveConfigFingerprint: sshConfig.effectiveConfigFingerprint
+        effectiveConfigFingerprint: sshConfig.effectiveConfigFingerprint,
+        hostKeyPolicy: isSshOnlyProduct() ? SSH_ONLY_HOST_KEY_POLICY : undefined
       }
     )
     removeForceCleanup = lease.onForceCleanup(() => ssh.close())
@@ -7990,7 +8016,8 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
       probeReuseProof: sshProbeReuseProof,
       adoptServedToken: adoptServedDashboardToken,
       rememberLog: sshRememberLog,
-      signal: lease.signal
+      signal: lease.signal,
+      verifyHost: () => ssh.assertHostVerified()
     })
   } catch (error: any) {
     if (created) {
@@ -8084,6 +8111,21 @@ function persistSshConnectionToken(profile, source, token) {
 // the connection test (which pass no profile) are unchanged.
 async function resolveRemoteBackend(profile) {
   const config = readDesktopConnectionConfig()
+
+  if (isSshOnlyProduct()) {
+    if (config.mode !== 'ssh') {
+      return null
+    }
+
+    const ssh = normalizeSshOnlyConfig(
+      { mode: 'ssh', ...(config.remote || {}) },
+      { identityPath: SSH_ONLY_IDENTITY_PATH }
+    )
+
+    const reuseToken = decryptDesktopSecret(config.remote?.token)
+
+    return bootstrapSshConnection(null, ssh, reuseToken, 'settings')
+  }
 
   // 1. Per-profile override — "a profile with its own remote host". Wins even
   //    over the env override so an explicitly-configured profile always
@@ -8289,15 +8331,22 @@ async function probeRemoteAuthMode(rawUrl) {
 }
 
 async function testDesktopConnectionConfig(input: any = {}) {
+  assertDesktopConnectionMode(String(input.mode || 'local'))
+
   if (input.mode === 'ssh') {
-    const sshConfig = normalizeSshConfig({
+    const rawSshConfig = {
       mode: 'ssh',
       host: input.sshHost,
       user: input.sshUser,
       port: input.sshPort,
       keyPath: input.sshKeyPath,
-      remoteHermesPath: input.sshRemoteHermesPath
-    })
+      remoteHermesPath: input.sshRemoteHermesPath,
+      remoteProfile: input.sshRemoteProfile
+    }
+
+    const sshConfig = isSshOnlyProduct()
+      ? normalizeSshOnlyConfig(rawSshConfig, { identityPath: SSH_ONLY_IDENTITY_PATH })
+      : normalizeSshConfig(rawSshConfig)
 
     if (!sshConfig) {
       return { reachable: false, sshError: 'unreachable', error: 'SSH host is required.' }
@@ -8305,7 +8354,10 @@ async function testDesktopConnectionConfig(input: any = {}) {
 
     const ssh = createSshProbeConnection(
       { host: sshConfig.host, user: sshConfig.user, port: sshConfig.port, keyPath: sshConfig.keyPath },
-      { rememberLog: sshRememberLog }
+      {
+        rememberLog: sshRememberLog,
+        hostKeyPolicy: isSshOnlyProduct() ? SSH_ONLY_HOST_KEY_POLICY : undefined
+      }
     )
 
     try {
@@ -8951,7 +9003,7 @@ async function startHermes() {
   // Classify this boot BEFORE the throwing resolve/mint runs: a remote failure
   // must NOT latch (it's transient — see shouldLatchBackendStartFailure), while
   // a local failure latches to break install-restart loops.
-  let attemptedRemote = primaryBackendIsRemote()
+  let attemptedRemote = isSshOnlyProduct() || primaryBackendIsRemote()
 
   const connectionPromise = (async () => {
     const connectRemote = async remote => {
@@ -8981,26 +9033,23 @@ async function startHermes() {
     }
 
     await advanceBootProgress('backend.resolve', 'Resolving Hermes backend', 8)
-    // Resolve for the desktop's primary profile so a per-profile remote
-    // override on the active profile is honored (falls back to env / global).
-    const token = crypto.randomBytes(32).toString('base64url')
-    // --port 0: the OS assigns an ephemeral port; the child announces it on stdout.
-    const backendArgs = ['serve', '--host', '127.0.0.1', '--port', '0']
-    // Pin the desktop's chosen profile via the global --profile flag. This is
-    // deterministic (it wins over the sticky ~/.hermes/active_profile file) and
-    // resolves HERMES_HOME the same way `hermes -p <name>` does on the CLI. An
-    // unset preference keeps the legacy launch so existing installs are
-    // unaffected.
-    const activeProfile = readActiveDesktopProfile()
-
-    if (activeProfile) {
-      backendArgs.unshift('--profile', activeProfile)
-    }
+    let token = ''
+    let backendArgs: string[] = []
 
     const setup = await runPrimaryBackendStartup({
       connectRemote,
       ensureLocalRuntime: ensureRuntime,
       prepareLocalBackend: async () => {
+        // Local tokens, arguments, PATH/venv probes, and runtime resolution are
+        // created only after the policy permits the local branch.
+        token = crypto.randomBytes(32).toString('base64url')
+        backendArgs = ['serve', '--host', '127.0.0.1', '--port', '0']
+        const activeProfile = readActiveDesktopProfile()
+
+        if (activeProfile) {
+          backendArgs.unshift('--profile', activeProfile)
+        }
+
         await advanceBootProgress('backend.runtime', 'Resolving Hermes runtime', 28)
 
         return resolveHermesBackend(backendArgs)
@@ -9008,11 +9057,14 @@ async function startHermes() {
       resolveRemote: () => {
         // Classify immediately before each throwing resolve. This callback runs
         // both for an already-saved remote and after first-run remote Apply.
-        attemptedRemote = primaryBackendIsRemote()
+        attemptedRemote = isSshOnlyProduct() || primaryBackendIsRemote()
 
         return resolveRemoteBackend(primaryProfileKey())
       },
       waitForDecision: waitForFirstRunSetupChoice,
+      sshOnly: isSshOnlyProduct(),
+      onSshOnlyConfigurationRequired: () =>
+        promptFirstRunSetupChoice({ kind: 'bootstrap-needed', platform: process.platform, activeRoot: '' }),
       // Mutual exclusion with an in-app update (#50238). Remote connections
       // return before this waiter; local starts park until the updater exits.
       waitForLocalStart: waitForUpdateToFinish
@@ -9212,7 +9264,7 @@ async function startHermes() {
     // child 'exit' handler to clear the cache — latching it would wedge the app
     // on "session expired" until a full restart, defeating reconnect, the
     // "Sign out & sign in" reload, and the wake-recovery revalidate path.
-    if (shouldLatchBackendStartFailure({ attemptedRemote })) {
+    if (shouldLatchBackendStartFailure({ attemptedRemote, sshOnly: isSshOnlyProduct() })) {
       backendStartFailure = error instanceof Error ? error : new Error(message)
     }
 
@@ -10944,7 +10996,9 @@ ipcMain.handle('hermes:orgo-desktop:doctor', async () => {
 
   return doctorOrgoComputer(apiKey, entry?.computerId || '')
 })
-ipcMain.handle('hermes:orgo-desktop:sync', async (_event, profiles) => syncOrgoMcpToProfiles(Array.isArray(profiles) ? profiles : []))
+ipcMain.handle('hermes:orgo-desktop:sync', async (_event, profiles) =>
+  syncOrgoMcpToProfiles(Array.isArray(profiles) ? profiles : [])
+)
 ipcMain.handle('hermes:orgo-desktop:workspaces', async () => {
   const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, 'default').entry
   const apiKey = decryptDesktopSecret(entry?.apiKey)
@@ -10968,12 +11022,18 @@ ipcMain.handle('hermes:orgo-desktop:computers', async (_event, workspaceId) => {
 ipcMain.handle('hermes:connectors:key:status', async () => withComposioBroker(broker => broker.keyStatus()))
 ipcMain.handle('hermes:connectors:key:save', async (_event, key) => withComposioBroker(broker => broker.saveKey(key)))
 ipcMain.handle('hermes:connectors:key:remove', async () => withComposioBroker(broker => broker.removeKey()))
-ipcMain.handle('hermes:connectors:catalog', async (_event, query) => withComposioBroker(broker => broker.listCatalog(query || {})))
+ipcMain.handle('hermes:connectors:catalog', async (_event, query) =>
+  withComposioBroker(broker => broker.listCatalog(query || {}))
+)
 ipcMain.handle('hermes:connectors:categories', async () => withComposioBroker(broker => broker.listCategories()))
 ipcMain.handle('hermes:connectors:connections', async () => withComposioBroker(broker => broker.listConnections()))
-ipcMain.handle('hermes:connectors:authorize', async (_event, slug) => withComposioBroker(broker => broker.authorize(slug)))
+ipcMain.handle('hermes:connectors:authorize', async (_event, slug) =>
+  withComposioBroker(broker => broker.authorize(slug))
+)
 ipcMain.handle('hermes:connectors:poll', async (_event, slug) => withComposioBroker(broker => broker.poll(slug)))
-ipcMain.handle('hermes:connectors:disconnect', async (_event, slug) => withComposioBroker(broker => broker.disconnect(slug)))
+ipcMain.handle('hermes:connectors:disconnect', async (_event, slug) =>
+  withComposioBroker(broker => broker.disconnect(slug))
+)
 ipcMain.handle('hermes:connectors:sync', async (_event, profiles) =>
   withComposioBroker(broker => broker.syncProfiles(Array.isArray(profiles) ? profiles : []))
 )
@@ -11134,40 +11194,77 @@ ipcMain.handle('hermes:cloud:agent-sign-in', async (_event, dashboardUrl) => {
   return cloudAgentSilentSignIn(dashboardUrl)
 })
 ipcMain.handle('hermes:connection-config:save', async (_event, payload) => {
+  const scope = connectionScopeKey(payload?.profile) || ''
+  const previous = readDesktopConnectionConfig()
   const config = coerceDesktopConnectionConfig(payload)
   writeDesktopConnectionConfig(config)
+
+  if (isSshOnlyProduct() && !pendingSshOnlyConnectionSaves.has(scope)) {
+    pendingSshOnlyConnectionSaves.set(scope, JSON.parse(JSON.stringify(previous)))
+  }
 
   return sanitizeDesktopConnectionConfig(config, payload?.profile)
 })
 
 async function applyDesktopConnectionConfig(payload) {
-  const config = coerceDesktopConnectionConfig(payload)
-  writeDesktopConnectionConfig(config)
-
   const key = connectionScopeKey(payload?.profile)
   const scope = key || ''
 
-  await applyConnectionChange({
-    cancelAndWait: value => sshBootstrapCoordinator.cancelAndWait(value),
-    isPrimary: !key || key === primaryProfileKey(),
-    rehomePrimary: () =>
-      rehomePrimaryConnection({
-        clearLocalBootstrapFailure: () => {
-          // A remote connection bypasses local runtime/bootstrap failures. Clear
-          // the local-install latch so unsupported/failure escape paths can re-home.
-          bootstrapFailure = null
-        },
-        mode: config.mode,
-        notifyConnectionApplied: sendConnectionApplied,
-        resumeFirstRunRemote: abandonFirstRunSetupChoiceForRemoteApply,
-        teardownPrimaryBackend: teardownPrimaryBackendAndWait
-      }),
-    scope,
-    sendApplied: sendConnectionApplied,
-    stopPool: stopPoolBackend,
-    teardownPrimary: () => teardownPrimaryBackendAndWait({ soft: true }),
-    teardownSsh: value => teardownSshConnection(value || null)
-  })
+  const previous = isSshOnlyProduct()
+    ? pendingSshOnlyConnectionSaves.get(scope) || JSON.parse(JSON.stringify(readDesktopConnectionConfig()))
+    : null
+
+  const config = coerceDesktopConnectionConfig(payload)
+  writeDesktopConnectionConfig(config)
+
+  if (isSshOnlyProduct()) {
+    try {
+      const tested = await testDesktopConnectionConfig(payload)
+
+      if (!tested.reachable) {
+        const error: any = new Error(tested.error || 'Strict SSH verification failed.')
+        error.kind = tested.sshError || 'unknown'
+        throw error
+      }
+    } catch (error) {
+      writeDesktopConnectionConfig(previous)
+      pendingSshOnlyConnectionSaves.delete(scope)
+      throw error
+    }
+  }
+
+  try {
+    await applyConnectionChange({
+      cancelAndWait: value => sshBootstrapCoordinator.cancelAndWait(value),
+      isPrimary: !key || key === primaryProfileKey(),
+      rehomePrimary: () =>
+        rehomePrimaryConnection({
+          clearLocalBootstrapFailure: () => {
+            // A remote connection bypasses local runtime/bootstrap failures. Clear
+            // the local-install latch so unsupported/failure escape paths can re-home.
+            bootstrapFailure = null
+          },
+          mode: config.mode,
+          notifyConnectionApplied: sendConnectionApplied,
+          resumeFirstRunRemote: abandonFirstRunSetupChoiceForRemoteApply,
+          teardownPrimaryBackend: teardownPrimaryBackendAndWait
+        }),
+      scope,
+      sendApplied: sendConnectionApplied,
+      stopPool: stopPoolBackend,
+      teardownPrimary: () => teardownPrimaryBackendAndWait({ soft: true }),
+      teardownSsh: value => teardownSshConnection(value || null)
+    })
+  } catch (error) {
+    if (isSshOnlyProduct()) {
+      writeDesktopConnectionConfig(previous)
+    }
+
+    pendingSshOnlyConnectionSaves.delete(scope)
+    throw error
+  }
+
+  pendingSshOnlyConnectionSaves.delete(scope)
 
   return sanitizeDesktopConnectionConfig(config, payload?.profile)
 }
@@ -12653,11 +12750,11 @@ ipcMain.handle('hermes:updates:check', async () =>
         fetchedAt: Date.now()
       }
     : checkUpdates().catch(error => ({
-    supported: true,
-    branch: readDesktopUpdateConfig().branch,
-    error: 'check-failed',
-    message: error?.message || String(error),
-    fetchedAt: Date.now()
+        supported: true,
+        branch: readDesktopUpdateConfig().branch,
+        error: 'check-failed',
+        message: error?.message || String(error),
+        fetchedAt: Date.now()
       }))
 )
 

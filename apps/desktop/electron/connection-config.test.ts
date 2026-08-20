@@ -26,10 +26,12 @@ import {
   gatewayTicketFailure,
   gatewayWsUrlIpcResult,
   isGatewayAuthRejection,
+  isNumericTailscaleIp,
   localProfileEntry,
   modeIsRemoteLike,
   normalizeRemoteBaseUrl,
   normalizeSshConfig,
+  normalizeSshOnlyConfig,
   normAuthMode,
   pathWithGlobalRemoteProfile,
   profileHasRemoteConnection,
@@ -195,6 +197,65 @@ test('normalizeSshConfig handles IPv6 and strict port bounds', () => {
     mode: 'ssh',
     host: 'box'
   })
+})
+
+test('SSH-only normalization accepts only numeric Tailscale addresses and the fixed identity', () => {
+  const identityPath = '/run/korgo-ssh/identity'
+
+  assert.equal(isNumericTailscaleIp('100.64.0.1'), true)
+  assert.equal(isNumericTailscaleIp('100.127.255.254'), true)
+  assert.equal(isNumericTailscaleIp('fd7a:115c:a1e0::42'), true)
+  assert.equal(isNumericTailscaleIp('100.128.0.1'), false)
+  assert.equal(isNumericTailscaleIp('mini.tailnet.ts.net'), false)
+
+  assert.deepEqual(
+    normalizeSshOnlyConfig(
+      {
+        mode: 'ssh',
+        host: '100.100.10.20',
+        user: 'cjm',
+        port: 22,
+        keyPath: identityPath,
+        remoteHermesPath: '/opt/hermes/bin/hermes',
+        remoteProfile: 'default'
+      },
+      { identityPath }
+    ),
+    {
+      mode: 'ssh',
+      host: '100.100.10.20',
+      user: 'cjm',
+      keyPath: identityPath,
+      remoteHermesPath: '/opt/hermes/bin/hermes',
+      remoteProfile: 'default'
+    }
+  )
+
+  for (const patch of [
+    { host: 'mini' },
+    { host: '-100.100.10.20' },
+    { keyPath: '/home/me/.ssh/id_ed25519' },
+    { user: '' },
+    { user: '-oProxyCommand=bad' },
+    { port: 0 },
+    { port: 65536 },
+    { remoteHermesPath: 'relative/hermes' },
+    { remoteProfile: 'bad profile' }
+  ]) {
+    assert.throws(() =>
+      normalizeSshOnlyConfig(
+        {
+          mode: 'ssh',
+          host: '100.100.10.20',
+          user: 'cjm',
+          port: 22,
+          keyPath: identityPath,
+          ...patch
+        },
+        { identityPath }
+      )
+    )
+  }
 })
 
 test('localProfileEntry preserves inactive SSH drafts but drops Cloud state', () => {

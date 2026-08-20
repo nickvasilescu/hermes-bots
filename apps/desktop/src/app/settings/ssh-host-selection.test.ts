@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { enrichSelectedSshHost, selectSshHost } from './ssh-host-selection'
+import { enrichSelectedSshHost, isNumericTailscaleIp, selectSshHost } from './ssh-host-selection'
 
 const state = {
   mode: 'ssh',
@@ -12,6 +12,14 @@ const state = {
 }
 
 describe('selectSshHost', () => {
+  it('accepts only numeric addresses from the Tailscale ranges for the contained SKU', () => {
+    expect(isNumericTailscaleIp('100.64.0.1')).toBe(true)
+    expect(isNumericTailscaleIp('100.127.255.254')).toBe(true)
+    expect(isNumericTailscaleIp('fd7a:115c:a1e0::1')).toBe(true)
+    expect(isNumericTailscaleIp('100.63.255.255')).toBe(false)
+    expect(isNumericTailscaleIp('mini.tailnet.ts.net')).toBe(false)
+  })
+
   it('clears host-specific fields when the selected host changes', () => {
     expect(selectSshHost(state, 'mac-box')).toEqual({
       mode: 'ssh',

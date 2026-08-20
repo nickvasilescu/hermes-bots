@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import type { DesktopTailscaleStatus } from '@/global'
 import { getGlobalModelInfo } from '@/hermes'
 import { Loader2 } from '@/lib/icons'
-import { isBotProduct } from '@/lib/product'
+import { isBotProduct, isSshOnlyProduct } from '@/lib/product'
 import { cn } from '@/lib/utils'
 
 const STORAGE_KEY = 'hermes-bot-setup-v2'
@@ -207,6 +207,20 @@ function StatusRow({ ok, title, detail }: { ok: boolean; title: string; detail: 
 }
 
 export function BotSetupOverlay({
+  enabled,
+  requestGateway
+}: {
+  enabled: boolean
+  requestGateway: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>
+}) {
+  if (isSshOnlyProduct()) {
+    return null
+  }
+
+  return <FullBotSetupOverlay enabled={enabled} requestGateway={requestGateway} />
+}
+
+function FullBotSetupOverlay({
   enabled,
   requestGateway
 }: {
@@ -596,7 +610,9 @@ export function BotSetupOverlay({
         ) : null}
         {setup.step === 'bot' ? (
           <div className="mt-4 grid gap-3">
-            <p className="text-sm text-muted-foreground">This is the bot you will land in after setup. You can add more later.</p>
+            <p className="text-sm text-muted-foreground">
+              This is the bot you will land in after setup. You can add more later.
+            </p>
             <Input autoFocus onChange={event => setBotName(event.target.value)} value={botName} />
             <Button disabled={busy} onClick={() => void createBot()}>
               Continue
@@ -605,7 +621,9 @@ export function BotSetupOverlay({
         ) : null}
         {setup.step === 'composio' ? (
           <div className="mt-4 grid gap-3">
-            <p className="text-sm text-muted-foreground">Optional. Paste a Composio Connect key (`ck_…`) to give every bot the same apps.</p>
+            <p className="text-sm text-muted-foreground">
+              Optional. Paste a Composio Connect key (`ck_…`) to give every bot the same apps.
+            </p>
             <Input onChange={event => setComposioKey(event.target.value)} placeholder="ck_…" value={composioKey} />
             <Button disabled={busy} onClick={() => void saveComposio()}>
               {composioKey.trim() ? 'Save and continue' : 'Skip for now'}
@@ -616,16 +634,24 @@ export function BotSetupOverlay({
           <div className="mt-4 grid gap-2">
             <StatusRow detail="Codex or Grok is connected." ok={doctor.provider} title="Runtime + model" />
             <StatusRow detail="Ready to chat." ok={doctor.bot} title="First bot" />
-            <StatusRow detail={doctor.composio ? 'Key saved for every bot.' : 'Skipped — add later from Connectors.'} ok={doctor.composio} title="Connect apps" />
-            <StatusRow detail={doctor.orgo ? 'Computer is selected and MCP is ready.' : 'Skipped — add later from the computer drawer.'} ok={doctor.orgo} title="Shared computer" />
+            <StatusRow
+              detail={doctor.composio ? 'Key saved for every bot.' : 'Skipped — add later from Connectors.'}
+              ok={doctor.composio}
+              title="Connect apps"
+            />
+            <StatusRow
+              detail={
+                doctor.orgo ? 'Computer is selected and MCP is ready.' : 'Skipped — add later from the computer drawer.'
+              }
+              ok={doctor.orgo}
+              title="Shared computer"
+            />
             <Button className="mt-2" onClick={() => finish(false)}>
               Open Bot Chat
             </Button>
           </div>
         ) : null}
-        {error ? (
-          <p className="mt-3 max-h-28 overflow-y-auto break-words text-sm text-destructive">{error}</p>
-        ) : null}
+        {error ? <p className="mt-3 max-h-28 overflow-y-auto break-words text-sm text-destructive">{error}</p> : null}
         {setup.step === 'tailscale' ? (
           <button className="mt-4 text-xs text-muted-foreground underline" onClick={useLocalHermes} type="button">
             Use this Mac instead

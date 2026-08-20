@@ -17,6 +17,7 @@ import {
   createSshProbeConnection,
   forwardSpec,
   hostArgs,
+  knownHostsContainsTarget,
   redactSecrets,
   runSsh,
   SSH_ERROR,
@@ -24,6 +25,7 @@ import {
   sshErrorMessage,
   stopTunnelChild,
   target,
+  validatePinnedSshFiles,
   validateSshTarget
 } from './ssh-connection'
 
@@ -91,6 +93,40 @@ test('baseSshOptions carries the house ControlMaster/BatchMode/accept-new policy
   assert.match(joined, /ExitOnForwardFailure=yes/)
   assert.match(joined, /ConnectTimeout=15/)
   assert.ok(!joined.includes('StrictHostKeyChecking=no'), 'never disables host-key checking')
+})
+
+test('strict host-key policy reaches every SSH operation constructor', () => {
+  const policy = {
+    strictHostKeyChecking: 'yes',
+    userKnownHostsFile: '/tmp/korgo-known-hosts',
+    globalKnownHostsFile: '/dev/null',
+    updateHostKeys: 'no'
+  }
+
+  const conn = {
+    user: 'me',
+    host: '100.100.10.20',
+    port: 22,
+    keyPath: '/tmp/korgo-identity',
+    controlPath: '/tmp/x.sock',
+    hostKeyPolicy: policy
+  }
+
+  const constructors = [
+    buildExecArgs(conn, 'true'),
+    buildControlArgs(conn, 'forward', ['-L', forwardSpec(5000, 6000)]),
+    buildMasterArgs(conn),
+    buildInteractiveSshArgs(conn, '')
+  ]
+
+  for (const args of constructors) {
+    const joined = args.join(' ')
+    assert.match(joined, /StrictHostKeyChecking=yes/)
+    assert.match(joined, /UserKnownHostsFile=\/tmp\/korgo-known-hosts/)
+    assert.match(joined, /GlobalKnownHostsFile=\/dev\/null/)
+    assert.match(joined, /UpdateHostKeys=no/)
+    assert.ok(!joined.includes('accept-new'))
+  }
 })
 
 test('hostArgs adds -p only for non-default port and -i only with a key', () => {
@@ -166,8 +202,62 @@ test('classifySshError detects a changed host key (fail-closed)', () => {
     classifySshError('@@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@@'),
     SSH_ERROR.HOST_KEY_CHANGED
   )
-  assert.equal(classifySshError('Host key verification failed.'), SSH_ERROR.HOST_KEY_CHANGED)
   assert.equal(classifySshError('Offending ECDSA key in /home/u/.ssh/known_hosts:5'), SSH_ERROR.HOST_KEY_CHANGED)
+})
+
+test('classifySshError distinguishes an unknown host key from a changed key', () => {
+  assert.equal(
+    classifySshError('No ED25519 host key is known for 100.100.10.20 and you have requested strict checking.'),
+    SSH_ERROR.HOST_KEY_UNKNOWN
+  )
+  assert.equal(classifySshError('Host key verification failed.'), SSH_ERROR.HOST_KEY_UNKNOWN)
+})
+
+test('pinned file validation rejects missing, symlinked, writable, and wrong-target inputs before spawn', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'korgo-ssh-policy-'))
+  const identity = path.join(dir, 'identity')
+  const knownHosts = path.join(dir, 'known_hosts')
+
+  const policy = {
+    strictHostKeyChecking: 'yes',
+    userKnownHostsFile: knownHosts,
+    globalKnownHostsFile: '/dev/null',
+    updateHostKeys: 'no'
+  }
+
+  const conn = { host: '100.100.10.20', port: 22, keyPath: identity }
+
+  try {
+    assert.throws(
+      () => validatePinnedSshFiles(conn, policy),
+      (error: any) => error.kind === SSH_ERROR.IDENTITY_MISSING
+    )
+
+    fs.writeFileSync(identity, 'test fixture, not a key', { mode: 0o600 })
+    assert.throws(
+      () => validatePinnedSshFiles(conn, policy),
+      (error: any) => error.kind === SSH_ERROR.KNOWN_HOSTS_MISSING
+    )
+
+    fs.writeFileSync(knownHosts, '100.100.10.21 ssh-ed25519 AAAATEST\n', { mode: 0o600 })
+    assert.throws(
+      () => validatePinnedSshFiles(conn, policy),
+      (error: any) => error.kind === SSH_ERROR.HOST_KEY_UNKNOWN
+    )
+
+    fs.writeFileSync(knownHosts, '100.100.10.20 ssh-ed25519 AAAATEST\n', { mode: 0o622 })
+    fs.chmodSync(knownHosts, 0o622)
+    assert.throws(
+      () => validatePinnedSshFiles(conn, policy),
+      (error: any) => error.kind === SSH_ERROR.KNOWN_HOSTS_UNSAFE
+    )
+
+    fs.chmodSync(knownHosts, 0o600)
+    assert.equal(knownHostsContainsTarget(fs.readFileSync(knownHosts, 'utf8'), conn.host, conn.port), true)
+    assert.doesNotThrow(() => validatePinnedSshFiles(conn, policy))
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('classifySshError detects auth failure', () => {
@@ -512,11 +602,29 @@ test('no-mux: forward spawns a persistent -N -L child; cancel + close kill it', 
     return child
   }
 
-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: false })
+  const conn = new SshConnection(
+    { host: 'box', user: 'me' },
+    {
+      spawnFn,
+      mux: false,
+      hostKeyPolicy: {
+        strictHostKeyChecking: 'yes',
+        userKnownHostsFile: '/tmp/korgo-known-hosts',
+        globalKnownHostsFile: '/dev/null',
+        updateHostKeys: 'no'
+      }
+    }
+  )
+
   await conn.forward(localPort, 9119)
   assert.equal(tunnels.length, 1, 'one persistent tunnel child')
   assert.ok(tunnels[0].args.includes('-L'), 'tunnel child carries -L spec')
   assert.ok(!tunnels[0].args.some(a => /ControlPath/.test(a)))
+  assert.ok(tunnels[0].args.includes('StrictHostKeyChecking=yes'))
+  assert.ok(tunnels[0].args.includes('UserKnownHostsFile=/tmp/korgo-known-hosts'))
+  assert.ok(tunnels[0].args.includes('GlobalKnownHostsFile=/dev/null'))
+  assert.ok(tunnels[0].args.includes('UpdateHostKeys=no'))
+  assert.ok(!tunnels[0].args.includes('StrictHostKeyChecking=accept-new'))
 
   await conn.cancelForward(localPort, 9119)
   assert.ok(tunnels[0].child._killed, 'cancelForward kills the tunnel child')

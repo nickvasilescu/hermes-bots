@@ -48,6 +48,126 @@ const PRIVY_SESSION_COOKIE_VARIANTS = ['__Host-privy-token', '__Secure-privy-tok
 // Keep this aligned with hermes_cli.profiles.validate_profile_name(). `default`
 // is the built-in root alias; these names cannot be created as profiles.
 const RESERVED_REMOTE_PROFILES = new Set(['hermes', 'test', 'tmp', 'root', 'sudo'])
+// eslint-disable-next-line no-control-regex -- product-boundary validation rejects control characters
+const SSH_CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/
+
+function isNumericTailscaleIp(value) {
+  const host = String(value || '')
+    .trim()
+    .toLowerCase()
+
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
+
+  if (ipv4) {
+    const octets = ipv4.slice(1).map(Number)
+
+    return octets.every(octet => octet >= 0 && octet <= 255) && octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127
+  }
+
+  if (!host.startsWith('fd7a:115c:a1e0:') || !/^[0-9a-f:]+$/.test(host)) {
+    return false
+  }
+
+  const halves = host.split('::')
+
+  if (halves.length > 2) {
+    return false
+  }
+
+  const groups = halves.flatMap(half => (half ? half.split(':') : []))
+
+  if (groups.some(group => !/^[0-9a-f]{1,4}$/.test(group))) {
+    return false
+  }
+
+  return halves.length === 2 ? groups.length < 8 : groups.length === 8
+}
+
+/**
+ * Fail-closed normalization for the contained Bot SSH-only SKU. Generic SSH
+ * keeps accepting aliases and ssh-agent/config defaults; the contained SKU
+ * accepts only the numeric Tailscale address and its fixed bind-mounted key.
+ */
+function normalizeSshOnlyConfig(entry, { identityPath }) {
+  if (!entry || typeof entry !== 'object' || entry.mode !== 'ssh') {
+    throw new Error('The SSH-only product requires an SSH connection.')
+  }
+
+  const host = String(entry.host || '').trim()
+
+  if (!isNumericTailscaleIp(host)) {
+    throw new Error('SSH host must be a numeric Tailscale IP address.')
+  }
+
+  const user = String(entry.user || '').trim()
+  const keyPath = String(entry.keyPath || '').trim()
+  const remoteHermesPath = String(entry.remoteHermesPath || '').trim()
+  const remoteProfile = String(entry.remoteProfile || '').trim()
+
+  for (const [label, value] of [
+    ['user', user],
+    ['identity path', keyPath],
+    ['remote Hermes path', remoteHermesPath],
+    ['profile', remoteProfile]
+  ]) {
+    if (SSH_CONTROL_CHAR_RE.test(value) || value.startsWith('-')) {
+      throw new Error(`SSH ${label} contains an unsafe value.`)
+    }
+  }
+
+  if (!user) {
+    throw new Error('SSH user is required.')
+  }
+
+  if (keyPath !== identityPath) {
+    throw new Error(`SSH identity file must be ${identityPath}.`)
+  }
+
+  const rawPort = entry.port
+  const portSpecified = rawPort != null && rawPort !== ''
+  const port = rawPort == null || rawPort === '' ? 22 : Number(rawPort)
+
+  if (
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65535 ||
+    (portSpecified && String(rawPort).trim() !== String(port))
+  ) {
+    throw new Error('SSH port must be an integer from 1 to 65535.')
+  }
+
+  if (
+    remoteHermesPath &&
+    remoteHermesPath !== '~' &&
+    !remoteHermesPath.startsWith('~/') &&
+    !remoteHermesPath.startsWith('/')
+  ) {
+    throw new Error('Remote Hermes path must be absolute or start with ~/.')
+  }
+
+  if (
+    remoteProfile &&
+    (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(remoteProfile) || RESERVED_REMOTE_PROFILES.has(remoteProfile))
+  ) {
+    throw new Error('Remote profile must be a valid Hermes profile name.')
+  }
+
+  const normalized = normalizeSshConfig({
+    mode: 'ssh',
+    host,
+    user,
+    port,
+    keyPath,
+    remoteHermesPath,
+    remoteProfile
+  })
+
+  if (!normalized) {
+    throw new Error('SSH configuration is invalid.')
+  }
+
+  return normalized
+}
 
 function normalizeRemoteBaseUrl(rawUrl) {
   let value = String(rawUrl || '').trim()
@@ -570,10 +690,12 @@ export {
   gatewayWsUrlIpcResult,
   hostLabelFromBaseUrl,
   isGatewayAuthRejection,
+  isNumericTailscaleIp,
   localProfileEntry,
   modeIsRemoteLike,
   normalizeRemoteBaseUrl,
   normalizeSshConfig,
+  normalizeSshOnlyConfig,
   normAuthMode,
   pathWithGlobalRemoteProfile,
   PRIVY_SESSION_COOKIE_VARIANTS,

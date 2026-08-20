@@ -28,6 +28,8 @@ export interface BackendStartFailureContext {
    * cloud) primary backend rather than spawning a local child.
    */
   attemptedRemote: boolean
+  /** Immutable SSH-only policy: failures must stay retryable and can never fall through to local repair. */
+  sshOnly?: boolean
 }
 
 /**
@@ -37,7 +39,7 @@ export interface BackendStartFailureContext {
  * without an app restart).
  */
 export function shouldLatchBackendStartFailure(context: BackendStartFailureContext): boolean {
-  return !context.attemptedRemote
+  return !context.sshOnly && !context.attemptedRemote
 }
 
 export interface RemoteReauthFailureContext {

@@ -16,10 +16,12 @@ import type {
 } from '@/global'
 import { useI18n } from '@/i18n'
 import { AlertCircle, ChevronDown, ChevronRight, Globe, iconSize, Loader2, Monitor } from '@/lib/icons'
+import { isSshOnlyProduct } from '@/lib/product'
 import { capitalize } from '@/lib/text'
 import { cn } from '@/lib/utils'
 
 import { FirstRunRemoteForm } from './first-run-remote-form'
+import { FirstRunSshForm } from './first-run-ssh-form'
 
 /**
  * DesktopInstallOverlay
@@ -397,6 +399,10 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
   }
 
   if (state.setupChoice) {
+    if (isSshOnlyProduct()) {
+      return <FirstRunSshForm />
+    }
+
     return (
       <div className="fixed inset-0 z-(--z-setup) flex items-center justify-center bg-background/90 p-4 backdrop-blur-md">
         <div className="w-full max-w-2xl rounded-xl border border-(--stroke-nous) bg-card p-8 shadow-nous">

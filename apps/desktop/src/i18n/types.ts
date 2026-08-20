@@ -2015,6 +2015,30 @@ export interface Translations {
     testSucceeded: (baseUrl: string, version?: string) => string
     applyRemote: string
     backToSetup: string
+    sshOnlySetupTitle: string
+    sshOnlySetupDesc: string
+    sshOnlyHostTitle: string
+    sshOnlyHostDesc: string
+    sshOnlyUserTitle: string
+    sshOnlyPortTitle: string
+    sshOnlyIdentityTitle: string
+    sshOnlyIdentityDesc: string
+    sshOnlyHermesPathTitle: string
+    sshOnlyProfileTitle: string
+    sshOnlyTestConnection: string
+    sshOnlyConnect: string
+    sshOnlyTestFirst: string
+    sshOnlyTestSucceeded: (host: string, platform: string) => string
+    sshOnlyTestFailed: string
+    sshOnlyHostKeyChanged: string
+    sshOnlyHostKeyUnknown: string
+    sshOnlyKnownHostsMissing: string
+    sshOnlyKnownHostsUnsafe: string
+    sshOnlyIdentityMissing: string
+    sshOnlyIdentityUnsafe: string
+    sshOnlyAuthFailed: string
+    sshOnlyTimeout: string
+    sshOnlyUnreachable: string
     failedTitle: string
     settingUpTitle: string
     finishingTitle: string

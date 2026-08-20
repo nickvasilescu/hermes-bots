@@ -19,9 +19,9 @@
  *     interactivity we fail fast and tell the user to load the key into their
  *     agent.
  *
- * Host-key policy: StrictHostKeyChecking=accept-new (trust-on-first-use, log
- * the fingerprint), never `no`. A host-key *change* fails closed with the
- * verbatim OpenSSH error surfaced to the UI.
+ * Generic builds retain their reviewed StrictHostKeyChecking=accept-new
+ * behavior. Contained SSH-only builds inject a strict, pre-seeded known-hosts
+ * policy. Neither path ever disables host-key checking.
  *
  * Every operation is raced against a hard timeout. A half-open TCP connection
  * after laptop sleep can leave ssh hanging indefinitely rather than erroring;
@@ -151,7 +151,7 @@ function defaultControlDir() {
 // Mux (POSIX): ControlMaster options so exec/forward share one authenticated
 // connection. No-mux (Windows OpenSSH never implemented mux sockets): plain
 // per-invocation options — each ssh call authenticates on its own.
-function baseSshOptions(controlPath, connectTimeoutMs?) {
+function baseSshOptions(controlPath, connectTimeoutMs?, hostKeyPolicy?: any) {
   const connectSecs = Math.max(1, Math.round((connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS) / 1000))
 
   const mux = controlPath
@@ -165,12 +165,24 @@ function baseSshOptions(controlPath, connectTimeoutMs?) {
       ]
     : []
 
+  const hostKeyOptions = hostKeyPolicy
+    ? [
+        '-o',
+        `StrictHostKeyChecking=${hostKeyPolicy.strictHostKeyChecking}`,
+        '-o',
+        `UserKnownHostsFile=${hostKeyPolicy.userKnownHostsFile}`,
+        '-o',
+        `GlobalKnownHostsFile=${hostKeyPolicy.globalKnownHostsFile}`,
+        '-o',
+        `UpdateHostKeys=${hostKeyPolicy.updateHostKeys}`
+      ]
+    : ['-o', 'StrictHostKeyChecking=accept-new']
+
   return [
     ...mux,
     '-o',
     'BatchMode=yes',
-    '-o',
-    'StrictHostKeyChecking=accept-new',
+    ...hostKeyOptions,
     '-o',
     'ExitOnForwardFailure=yes',
     '-o',
@@ -200,7 +212,7 @@ function target(user, host) {
 
 function buildExecArgs(conn, remoteCommand, connectTimeoutMs?) {
   return [
-    ...baseSshOptions(conn.controlPath, connectTimeoutMs),
+    ...baseSshOptions(conn.controlPath, connectTimeoutMs, conn.hostKeyPolicy),
     ...hostArgs(conn),
     '--',
     target(conn.user, conn.host),
@@ -213,7 +225,7 @@ function buildControlArgs(conn, op, extra: string[] = [], connectTimeoutMs?) {
     '-O',
     op,
     ...extra,
-    ...baseSshOptions(conn.controlPath, connectTimeoutMs),
+    ...baseSshOptions(conn.controlPath, connectTimeoutMs, conn.hostKeyPolicy),
     ...hostArgs(conn),
     '--',
     target(conn.user, conn.host)
@@ -228,7 +240,7 @@ function buildMasterArgs(conn, connectTimeoutMs?) {
     '-M',
     '-N',
     '-f',
-    ...baseSshOptions(conn.controlPath, connectTimeoutMs),
+    ...baseSshOptions(conn.controlPath, connectTimeoutMs, conn.hostKeyPolicy),
     ...hostArgs(conn),
     '--',
     target(conn.user, conn.host)
@@ -244,7 +256,7 @@ function buildMasterArgs(conn, connectTimeoutMs?) {
 function buildInteractiveSshArgs(conn, remoteCwd, connectTimeoutMs?, remoteCommand?) {
   const args = [
     '-tt',
-    ...baseSshOptions(conn.controlPath, connectTimeoutMs),
+    ...baseSshOptions(conn.controlPath, connectTimeoutMs, conn.hostKeyPolicy),
     ...hostArgs(conn),
     '--',
     target(conn.user, conn.host)
@@ -280,6 +292,11 @@ const SSH_ERROR = {
   UNREACHABLE: 'unreachable',
   AUTH_FAILED: 'auth-failed',
   HOST_KEY_CHANGED: 'host-key-changed',
+  HOST_KEY_UNKNOWN: 'host-key-unknown',
+  KNOWN_HOSTS_MISSING: 'known-hosts-missing',
+  KNOWN_HOSTS_UNSAFE: 'known-hosts-unsafe',
+  IDENTITY_MISSING: 'identity-missing',
+  IDENTITY_UNSAFE: 'identity-unsafe',
   TIMEOUT: 'timeout',
   UNKNOWN: 'unknown'
 }
@@ -289,12 +306,12 @@ const SSH_ERROR = {
 function classifySshError(stderr) {
   const text = String(stderr || '')
 
-  if (
-    /REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed|Offending (?:key|ECDSA|RSA|ED25519)/i.test(
-      text
-    )
-  ) {
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Offending (?:key|ECDSA|RSA|ED25519)/i.test(text)) {
     return SSH_ERROR.HOST_KEY_CHANGED
+  }
+
+  if (/No .* host key is known|No host key is known|Host key verification failed/i.test(text)) {
+    return SSH_ERROR.HOST_KEY_UNKNOWN
   }
 
   if (
@@ -316,17 +333,44 @@ function classifySshError(stderr) {
   return SSH_ERROR.UNKNOWN
 }
 
-function sshErrorMessage(kind, conn, stderr?) {
+function sshErrorMessage(kind, conn, stderr?, hostKeyPolicy?: any) {
   const host = target(conn.user, conn.host)
 
   switch (kind) {
     case SSH_ERROR.HOST_KEY_CHANGED:
+      if (hostKeyPolicy) {
+        return (
+          `The host key for ${host} does not match the operator-managed key in ${hostKeyPolicy.userKnownHostsFile}. ` +
+          'Verify the new fingerprint out of band before replacing that file. This app will not accept or update it.\n\n' +
+          String(stderr || '').trim()
+        )
+      }
+
       return (
         `The host key for ${host} has CHANGED since you last connected. ` +
         `This could be a man-in-the-middle attack, or the server was reinstalled. ` +
         `SSH refused to connect. Verify the change is expected, then remove the old key ` +
         `with \`ssh-keygen -R ${conn.host}\` and reconnect.\n\n${String(stderr || '').trim()}`
       )
+
+    case SSH_ERROR.HOST_KEY_UNKNOWN:
+      return (
+        `No operator-verified host key for ${host} exists in ${hostKeyPolicy?.userKnownHostsFile || 'known_hosts'}. ` +
+        'Add the verified fingerprint outside this app; automatic trust is disabled.\n\n' +
+        String(stderr || '').trim()
+      )
+
+    case SSH_ERROR.KNOWN_HOSTS_MISSING:
+      return `The operator-managed SSH known-hosts file is missing: ${hostKeyPolicy?.userKnownHostsFile || 'unknown path'}.`
+
+    case SSH_ERROR.KNOWN_HOSTS_UNSAFE:
+      return `The operator-managed SSH known-hosts file is unsafe: ${hostKeyPolicy?.userKnownHostsFile || 'unknown path'}.`
+
+    case SSH_ERROR.IDENTITY_MISSING:
+      return `The fixed SSH identity file is missing: ${conn.keyPath || 'unknown path'}.`
+
+    case SSH_ERROR.IDENTITY_UNSAFE:
+      return `The fixed SSH identity file is unsafe: ${conn.keyPath || 'unknown path'}.`
 
     case SSH_ERROR.AUTH_FAILED:
       return (
@@ -344,6 +388,91 @@ function sshErrorMessage(kind, conn, stderr?) {
 
     default:
       return `SSH error connecting to ${host}: ${String(stderr || '').trim() || 'unknown failure'}`
+  }
+}
+
+function knownHostsTarget(host, port) {
+  return Number(port || 22) === 22 ? String(host) : `[${host}]:${Number(port)}`
+}
+
+function knownHostsContainsTarget(contents, host, port) {
+  const expected = knownHostsTarget(host, port)
+
+  return String(contents || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('#'))
+    .some(line => {
+      const hosts = line.split(/\s+/, 1)[0]
+
+      return hosts.split(',').includes(expected)
+    })
+}
+
+function pinnedFileError(kind, message, cause?) {
+  const error: any = new Error(message)
+  error.kind = kind
+  error.cause = cause
+
+  return error
+}
+
+function validatePinnedSshFiles(conn, hostKeyPolicy, fsApi: any = fs, getuid = process.getuid) {
+  if (!hostKeyPolicy) {
+    return
+  }
+
+  const validateFile = (filePath, missingKind, unsafeKind, label) => {
+    let stat
+
+    try {
+      stat = fsApi.lstatSync(filePath)
+    } catch (cause: any) {
+      if (cause?.code === 'ENOENT') {
+        throw pinnedFileError(missingKind, `${label} is missing: ${filePath}`, cause)
+      }
+
+      throw pinnedFileError(unsafeKind, `${label} could not be inspected: ${filePath}`, cause)
+    }
+
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw pinnedFileError(unsafeKind, `${label} must be a non-symlink regular file: ${filePath}`)
+    }
+
+    if (typeof getuid === 'function' && stat.uid !== getuid()) {
+      throw pinnedFileError(unsafeKind, `${label} is not owned by the current user: ${filePath}`)
+    }
+
+    if ((stat.mode & 0o022) !== 0) {
+      throw pinnedFileError(unsafeKind, `${label} must not be group- or other-writable: ${filePath}`)
+    }
+  }
+
+  validateFile(conn.keyPath, SSH_ERROR.IDENTITY_MISSING, SSH_ERROR.IDENTITY_UNSAFE, 'SSH identity')
+  validateFile(
+    hostKeyPolicy.userKnownHostsFile,
+    SSH_ERROR.KNOWN_HOSTS_MISSING,
+    SSH_ERROR.KNOWN_HOSTS_UNSAFE,
+    'SSH known-hosts file'
+  )
+
+  let contents
+
+  try {
+    contents = fsApi.readFileSync(hostKeyPolicy.userKnownHostsFile, 'utf8')
+  } catch (cause) {
+    throw pinnedFileError(
+      SSH_ERROR.KNOWN_HOSTS_UNSAFE,
+      `SSH known-hosts file could not be read: ${hostKeyPolicy.userKnownHostsFile}`,
+      cause
+    )
+  }
+
+  if (!knownHostsContainsTarget(contents, conn.host, conn.port)) {
+    throw pinnedFileError(
+      SSH_ERROR.HOST_KEY_UNKNOWN,
+      `No exact host entry for ${knownHostsTarget(conn.host, conn.port)} exists in ${hostKeyPolicy.userKnownHostsFile}.`
+    )
   }
 }
 
@@ -460,6 +589,7 @@ class SshConnection {
   user: string
   port: number
   keyPath: string
+  hostKeyPolicy: any
   controlPath: string
   _spawnFn: any
   _log: (msg: string) => void
@@ -467,6 +597,7 @@ class SshConnection {
   _execTimeoutMs: number
   _forwardTimeoutMs: number
   _opened: boolean
+  _hostVerified: boolean
   _mux: boolean
   _tunnels: Map<string, any>
 
@@ -486,6 +617,7 @@ class SshConnection {
     this.user = cfg.user || ''
     this.port = port
     this.keyPath = cfg.keyPath || ''
+    this.hostKeyPolicy = opts.hostKeyPolicy || null
     // Windows OpenSSH has no ControlMaster (mux sockets were never implemented
     // on Win32) — fall back to one ssh invocation per operation and a
     // persistent `ssh -N -L` child per tunnel. Empty controlPath routes the
@@ -508,6 +640,7 @@ class SshConnection {
     this._execTimeoutMs = opts.execTimeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS
     this._forwardTimeoutMs = opts.forwardTimeoutMs ?? DEFAULT_FORWARD_TIMEOUT_MS
     this._opened = false
+    this._hostVerified = false
   }
 
   // Lifecycle logging — ALWAYS through redaction.
@@ -525,7 +658,7 @@ class SshConnection {
 
     const stderr = typeof stderrOrErr === 'string' ? stderrOrErr : stderrOrErr?.message || ''
     const kind = stderr ? classifySshError(stderr) : fallbackKind
-    const err: any = new Error(sshErrorMessage(kind, this, stderr))
+    const err: any = new Error(sshErrorMessage(kind, this, stderr, this.hostKeyPolicy))
     err.kind = kind
 
     return err
@@ -535,6 +668,8 @@ class SshConnection {
   // a live master is a no-op). No-mux: there is no master; validate auth +
   // reachability with a one-shot `ssh true` so failures classify identically.
   async open() {
+    validatePinnedSshFiles(this, this.hostKeyPolicy)
+
     if (await this.isAlive()) {
       // -O check passing is not proof the master works: a ControlPersist master
       // can survive a failed teardown with wedged channels (observed on macOS
@@ -542,6 +677,7 @@ class SshConnection {
       // a real exec before trusting it; on failure, evict and dial fresh.
       if (!this._mux || (await this._verifyMuxChannel())) {
         this._opened = true
+        this._hostVerified = true
 
         return
       }
@@ -568,6 +704,7 @@ class SshConnection {
       }
 
       this._opened = true
+      this._hostVerified = true
       this._logLine('connection verified (no-mux; per-operation ssh)')
 
       return
@@ -616,12 +753,19 @@ class SshConnection {
     }
 
     this._opened = true
+    this._hostVerified = true
     this._logLine('control master established')
   }
 
   // Liveness. Mux: `-O check` against the master socket. No-mux: a cheap
   // one-shot exec — "alive" means "we can still authenticate and run".
   async isAlive() {
+    try {
+      validatePinnedSshFiles(this, this.hostKeyPolicy)
+    } catch {
+      return false
+    }
+
     if ([...this._tunnels.values()].some(tunnel => tunnel.alive === false)) {
       return false
     }
@@ -636,6 +780,12 @@ class SshConnection {
       return result.code === 0
     } catch {
       return false
+    }
+  }
+
+  assertHostVerified() {
+    if (this.hostKeyPolicy && !this._hostVerified) {
+      throw pinnedFileError(SSH_ERROR.HOST_KEY_UNKNOWN, 'SSH host identity has not been strictly verified.')
     }
   }
 
@@ -710,7 +860,7 @@ class SshConnection {
 
     if (!this._mux) {
       const args = [
-        ...baseSshOptions('', this._connectTimeoutMs),
+        ...baseSshOptions('', this._connectTimeoutMs, this.hostKeyPolicy),
         ...hostArgs(this),
         '-v',
         '-N',
@@ -841,6 +991,7 @@ class SshConnection {
       }
 
       this._opened = false
+      this._hostVerified = false
       this._logLine('connection closed (no-mux tunnels killed)')
 
       return
@@ -870,6 +1021,7 @@ class SshConnection {
     }
 
     this._opened = false
+    this._hostVerified = false
   }
 }
 
@@ -908,6 +1060,8 @@ export {
   DEFAULT_FORWARD_TIMEOUT_MS,
   forwardSpec,
   hostArgs,
+  knownHostsContainsTarget,
+  knownHostsTarget,
   pickLocalPort,
   redactSecrets,
   runSsh,
@@ -917,5 +1071,6 @@ export {
   stopTunnelChild,
   target,
   validateKeyPath,
+  validatePinnedSshFiles,
   validateSshTarget
 }

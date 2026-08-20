@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { test, vi } from 'vitest'
 
 import { createFirstRunSetupGate } from './first-run-setup-gate'
-import { FirstRunSetupResetError, runPrimaryBackendStartup } from './primary-backend-startup'
+import { FirstRunSetupResetError, runPrimaryBackendStartup, SshOnlyConfigurationError } from './primary-backend-startup'
 
 const bootstrapBackend = {
   activeRoot: '/tmp/hermes-home/hermes-agent',
@@ -59,6 +59,42 @@ test('an already-saved remote bypasses every local startup step', async () => {
   assert.equal(options.waitForLocalStart.mock.calls.length, 0)
   assert.equal(options.prepareLocalBackend.mock.calls.length, 0)
   assert.equal(options.waitForDecision.mock.calls.length, 0)
+  assert.equal(options.ensureLocalRuntime.mock.calls.length, 0)
+})
+
+test('SSH-only missing configuration fails closed before every local callback', async () => {
+  const onRequired = vi.fn()
+  const options = startupOptions({ sshOnly: true, onSshOnlyConfigurationRequired: onRequired })
+
+  await assert.rejects(
+    () => runPrimaryBackendStartup(options),
+    (error: unknown) => error instanceof SshOnlyConfigurationError && error.sshOnlyConfigurationError
+  )
+  assert.equal(options.waitForLocalStart.mock.calls.length, 0)
+  assert.equal(options.prepareLocalBackend.mock.calls.length, 0)
+  assert.equal(options.waitForDecision.mock.calls.length, 0)
+  assert.equal(options.ensureLocalRuntime.mock.calls.length, 0)
+  assert.equal(options.connectRemote.mock.calls.length, 0)
+  assert.equal(onRequired.mock.calls.length, 1)
+})
+
+test('SSH-only malformed configuration is typed and cannot fall through to local startup', async () => {
+  const cause: any = new Error('SSH host must be a numeric Tailscale IP address.')
+  cause.kind = 'invalid-config'
+
+  const options = startupOptions({
+    sshOnly: true,
+    resolveRemote: vi.fn(async () => {
+      throw cause
+    })
+  })
+
+  await assert.rejects(
+    () => runPrimaryBackendStartup(options),
+    (error: any) => error instanceof SshOnlyConfigurationError && error.cause === cause
+  )
+  assert.equal(options.waitForLocalStart.mock.calls.length, 0)
+  assert.equal(options.prepareLocalBackend.mock.calls.length, 0)
   assert.equal(options.ensureLocalRuntime.mock.calls.length, 0)
 })
 

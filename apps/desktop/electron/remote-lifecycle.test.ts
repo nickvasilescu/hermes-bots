@@ -453,6 +453,26 @@ test('connect() spawns fresh when there is no lockfile, adopts the served token'
   assert.equal(result.tokenFingerprint, fingerprintToken('the-served-token'))
 })
 
+test('connect() verifies the host before any probe, token upload, or remote start', async () => {
+  const ssh = fakeSsh()
+
+  const verifyHost = async () => {
+    const error: any = new Error('operator host key is unknown')
+    error.kind = 'host-key-unknown'
+    throw error
+  }
+
+  const adoptServedToken = async () => {
+    throw new Error('must not adopt a token')
+  }
+
+  await assert.rejects(
+    () => connect(connectDeps(ssh, { verifyHost, adoptServedToken })),
+    (error: any) => error.kind === 'host-key-unknown'
+  )
+  assert.deepEqual(ssh.calls, [])
+})
+
 test('managed SSH maps a local scope to a different non-default remote profile', async () => {
   const localScope = 'work'
 

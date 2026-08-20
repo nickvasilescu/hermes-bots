@@ -233,7 +233,8 @@ export const en: Translations = {
     yoursEmpty: 'Connected apps will show up here.',
     noMatches: 'No apps match that search.',
     keyTitle: 'Composio API key',
-    keyHelp: 'Paste the Connect key from Composio → Install (starts with ck_). It is encrypted with the OS keychain and never sent to chat.',
+    keyHelp:
+      'Paste the Connect key from Composio → Install (starts with ck_). It is encrypted with the OS keychain and never sent to chat.',
     keyLabel: 'Composio API key',
     keyPlaceholder: 'Paste a Composio Connect API key (ck_…)',
     keyRequired: 'Add a Composio key to browse and connect apps.',
@@ -242,7 +243,8 @@ export const en: Translations = {
     getKey: 'Get a key from Composio → Install',
     savingKey: 'Saving key…',
     removeKeyTitle: 'Remove Composio key?',
-    removeKeyHelp: 'Connected apps stay at Composio until you disconnect them, but Hermes will stop provisioning them to bots.',
+    removeKeyHelp:
+      'Connected apps stay at Composio until you disconnect them, but Hermes will stop provisioning them to bots.',
     replaceKeyTitle: 'Replace Composio key',
     replaceKeyHelp: 'A new key may belong to a different Composio project. Sessions will be rebuilt after it is saved.',
     connectedHelp: 'Available to every bot.',
@@ -2399,6 +2401,40 @@ export const en: Translations = {
     testSucceeded: (baseUrl, version) => `Connected to ${baseUrl}${version ? ` (${version})` : ''}.`,
     applyRemote: 'Apply and reconnect',
     backToSetup: 'Back',
+    sshOnlySetupTitle: 'Connect existing Hermes over SSH',
+    sshOnlySetupDesc:
+      'Use the operator-managed identity and known-hosts files to connect to Mini over its numeric Tailscale address. No local runtime or cloud account will be started.',
+    sshOnlyHostTitle: 'Mini Tailscale IP',
+    sshOnlyHostDesc:
+      'Enter the stable numeric Tailscale IPv4 or IPv6 address. DNS names and SSH aliases are not accepted.',
+    sshOnlyUserTitle: 'SSH user',
+    sshOnlyPortTitle: 'SSH port',
+    sshOnlyIdentityTitle: 'Identity file',
+    sshOnlyIdentityDesc:
+      'Fixed read-only path supplied by the contained launcher. Private-key contents are never read by the UI.',
+    sshOnlyHermesPathTitle: 'Remote Hermes path (optional)',
+    sshOnlyProfileTitle: 'Remote profile (optional)',
+    sshOnlyTestConnection: 'Verify SSH connection',
+    sshOnlyConnect: 'Save and connect',
+    sshOnlyTestFirst: 'Verify the SSH connection before saving.',
+    sshOnlyTestSucceeded: (host, platform) => `Verified ${host}${platform ? ` (${platform})` : ''}.`,
+    sshOnlyTestFailed: 'SSH verification failed.',
+    sshOnlyHostKeyChanged:
+      'The Mini host key does not match the operator-verified key. Replace the managed known-hosts file only after verifying the new fingerprint out of band.',
+    sshOnlyHostKeyUnknown:
+      'The managed known-hosts file does not contain a key for this Mini address. Ask the operator to add the verified fingerprint; this app will not trust it automatically.',
+    sshOnlyKnownHostsMissing:
+      'The operator-managed known-hosts file is missing at /run/korgo-ssh/known_hosts. Fix the contained launcher input and try again.',
+    sshOnlyKnownHostsUnsafe:
+      'The operator-managed known-hosts file is not a safe regular file. Fix its ownership, permissions, or bind mount and try again.',
+    sshOnlyIdentityMissing:
+      'The SSH identity is missing at /run/korgo-ssh/identity. Fix the contained launcher input and try again.',
+    sshOnlyIdentityUnsafe:
+      'The SSH identity is not a safe owner-managed regular file. Fix its ownership, permissions, or bind mount and try again.',
+    sshOnlyAuthFailed: 'Mini rejected the fixed SSH identity. Confirm its public key is authorized for this SSH user.',
+    sshOnlyTimeout: 'SSH verification timed out. Confirm Mini is awake and reachable over Tailscale.',
+    sshOnlyUnreachable:
+      'Could not reach Mini over SSH. Check the numeric Tailscale IP, port, and Tailscale connectivity.',
     failedTitle: 'Installation failed',
     settingUpTitle: 'Setting up Hermes Agent',
     finishingTitle: 'Finishing up',

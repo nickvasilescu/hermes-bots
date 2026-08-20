@@ -3,8 +3,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { DesktopBootstrapEvent, DesktopBootstrapState, DesktopConnectionProbeResult } from '@/global'
+import { isSshOnlyProduct } from '@/lib/product'
 
 import { DesktopInstallOverlay } from './desktop-install-overlay'
+
+vi.mock('@/lib/product', () => ({
+  isSshOnlyProduct: vi.fn(() => false)
+}))
 
 function bootstrapState(overrides: Partial<DesktopBootstrapState> = {}): DesktopBootstrapState {
   return {
@@ -75,12 +80,13 @@ function whenPresent(text: string): Promise<HTMLElement> {
       }
     })
 
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    observer.observe(globalThis.document.body, { childList: true, subtree: true, characterData: true })
   })
 }
 
 beforeEach(() => {
   vi.restoreAllMocks()
+  vi.mocked(isSshOnlyProduct).mockReturnValue(false)
 })
 
 afterEach(() => {
@@ -90,6 +96,24 @@ afterEach(() => {
 })
 
 describe('DesktopInstallOverlay first-run setup', () => {
+  it('renders only the SSH form in the SSH-only SKU and never offers local bootstrap', async () => {
+    vi.mocked(isSshOnlyProduct).mockReturnValue(true)
+
+    const desktop = installDesktopMock(
+      bootstrapState({
+        setupChoice: { platform: 'linux', activeRoot: '/unused/in/ssh-only' }
+      })
+    )
+
+    render(<DesktopInstallOverlay />)
+
+    expect(await screen.findByText('Connect existing Hermes over SSH')).toBeTruthy()
+    expect(screen.getByLabelText('Mini Tailscale IP')).toBeTruthy()
+    expect(screen.queryByText('Install Hermes locally')).toBeNull()
+    expect(screen.queryByText('Connect to existing Hermes')).toBeNull()
+    expect(desktop.continueBootstrapLocal).not.toHaveBeenCalled()
+  })
+
   it('shows the remote/local choice without installer progress', async () => {
     installDesktopMock(
       bootstrapState({

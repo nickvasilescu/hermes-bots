@@ -4,7 +4,7 @@ import { test, vi } from 'vitest'
 
 import { applyConnectionChange } from './connection-apply'
 import { createFirstRunSetupGate } from './first-run-setup-gate'
-import { runPrimaryBackendStartup } from './primary-backend-startup'
+import { runPrimaryBackendStartup, SshOnlyConfigurationError } from './primary-backend-startup'
 import { rehomePrimaryConnection } from './primary-connection-rehome'
 
 test('a first-run bootstrap-needed remote apply connects without ensuring or bootstrapping locally', async () => {
@@ -92,6 +92,46 @@ test('a first-run bootstrap-needed remote apply connects without ensuring or boo
   assert.equal(teardownPrimaryBackend.mock.calls.length, 0)
   assert.equal(clearLocalBootstrapFailure.mock.calls.length, 1)
   assert.equal(notifyConnectionApplied.mock.calls.length, 0)
+})
+
+test('SSH-only first run requests onboarding without resolving runtime, bootstrap, or brokers', async () => {
+  const localRuntime = vi.fn()
+  const bootstrap = vi.fn()
+  const orgo = vi.fn()
+  const composio = vi.fn()
+  const updaterRecovery = vi.fn()
+  const sandboxFallback = vi.fn()
+  const prompt = vi.fn()
+
+  await assert.rejects(
+    () =>
+      runPrimaryBackendStartup({
+        sshOnly: true,
+        connectRemote: vi.fn(),
+        ensureLocalRuntime: localRuntime,
+        prepareLocalBackend: async () => {
+          await bootstrap()
+          await orgo()
+          await composio()
+          await updaterRecovery()
+          await sandboxFallback()
+
+          return {}
+        },
+        resolveRemote: async () => null,
+        onSshOnlyConfigurationRequired: prompt,
+        waitForDecision: vi.fn(),
+        waitForLocalStart: vi.fn()
+      }),
+    (error: unknown) => error instanceof SshOnlyConfigurationError
+  )
+  assert.equal(prompt.mock.calls.length, 1)
+  assert.equal(localRuntime.mock.calls.length, 0)
+  assert.equal(bootstrap.mock.calls.length, 0)
+  assert.equal(orgo.mock.calls.length, 0)
+  assert.equal(composio.mock.calls.length, 0)
+  assert.equal(updaterRecovery.mock.calls.length, 0)
+  assert.equal(sandboxFallback.mock.calls.length, 0)
 })
 
 test('a primary apply without an active first-run gate tears down before reconnect notification', async () => {

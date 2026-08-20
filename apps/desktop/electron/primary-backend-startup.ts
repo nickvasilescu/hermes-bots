@@ -5,6 +5,8 @@ export interface PrimaryBackendStartupOptions<Backend, RuntimeBackend, Remote, C
   ensureLocalRuntime: (backend: Backend) => Promise<RuntimeBackend>
   prepareLocalBackend: () => Backend | Promise<Backend>
   resolveRemote: () => Promise<Remote | null>
+  sshOnly?: boolean
+  onSshOnlyConfigurationRequired?: (error: SshOnlyConfigurationError) => void
   waitForDecision: (backend: Backend) => Promise<FirstRunSetupDecision>
   waitForLocalStart: () => Promise<unknown>
 }
@@ -21,6 +23,16 @@ export class FirstRunSetupResetError extends Error {
   }
 }
 
+export class SshOnlyConfigurationError extends Error {
+  readonly code = 'ssh-only-configuration-required'
+  readonly sshOnlyConfigurationError = true
+
+  constructor(message = 'Configure the SSH-only connection before starting Korgo Bot.', options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'SshOnlyConfigurationError'
+  }
+}
+
 // Owns the production startHermes path up to the local process spawn. Keeping
 // the full ordering here makes the first-run remote boundary executable in a
 // test: an already-saved remote wins immediately; otherwise update exclusion
@@ -31,15 +43,39 @@ export async function runPrimaryBackendStartup<Backend, RuntimeBackend, Remote, 
   ensureLocalRuntime,
   prepareLocalBackend,
   resolveRemote,
+  sshOnly = false,
+  onSshOnlyConfigurationRequired,
   waitForDecision,
   waitForLocalStart
 }: PrimaryBackendStartupOptions<Backend, RuntimeBackend, Remote, Connection>): Promise<
   PrimaryBackendStartupResult<RuntimeBackend, Connection>
 > {
-  const savedRemote = await resolveRemote()
+  let savedRemote
+
+  try {
+    savedRemote = await resolveRemote()
+  } catch (cause) {
+    if (!sshOnly) {
+      throw cause
+    }
+
+    const error = new SshOnlyConfigurationError(
+      cause instanceof Error ? cause.message : 'The saved SSH-only connection is invalid.',
+      { cause }
+    )
+
+    onSshOnlyConfigurationRequired?.(error)
+    throw error
+  }
 
   if (savedRemote) {
     return { kind: 'remote', connection: await connectRemote(savedRemote) }
+  }
+
+  if (sshOnly) {
+    const error = new SshOnlyConfigurationError()
+    onSshOnlyConfigurationRequired?.(error)
+    throw error
   }
 
   await waitForLocalStart()

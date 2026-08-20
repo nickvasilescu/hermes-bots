@@ -694,6 +694,14 @@ async function connect(deps) {
   const log = msg => rememberLog(`[ssh-lifecycle] ${msg}`)
 
   assertNotAborted(signal)
+
+  if (typeof deps.verifyHost === 'function') {
+    await deps.verifyHost()
+  } else if (typeof ssh.assertHostVerified === 'function') {
+    ssh.assertHostVerified()
+  }
+
+  assertNotAborted(signal)
   const platform = await probeRemotePlatform(ssh)
   log(`remote platform ${platform.os}/${platform.arch}`)
   const hermesPath = await locateHermes(ssh, remoteHermesPath)

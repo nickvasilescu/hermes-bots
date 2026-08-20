@@ -15,6 +15,10 @@ test('never latches a REMOTE failure so recovery stays retryable without a resta
   assert.equal(shouldLatchBackendStartFailure({ attemptedRemote: true }), false)
 })
 
+test('never latches an SSH-only setup failure as a local bootstrap failure', () => {
+  assert.equal(shouldLatchBackendStartFailure({ attemptedRemote: false, sshOnly: true }), false)
+})
+
 test('the two branches are mutually exclusive (a failure either latches or stays retryable)', () => {
   for (const attemptedRemote of [true, false]) {
     const latched = shouldLatchBackendStartFailure({ attemptedRemote })
