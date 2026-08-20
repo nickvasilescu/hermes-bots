@@ -93,6 +93,23 @@ let
 
     doCheck = true;
 
+    # importNpmLock rewrites direct dependencies in its generated package.json
+    # to fixed file:/nix/store tarballs. npm then rejects the root nanoid
+    # override because its registry-version value no longer exactly matches the
+    # rewritten direct dependency. Point the override at that direct dependency
+    # instead; this changes no lock entry or resolved tarball and keeps the
+    # install fully offline. The copy is package-local because npmConfigHook's
+    # generated metadata is shared by the other workspace derivations.
+    postConfigure = ''
+      korgoNpmDeps="$TMPDIR/korgo-npm-deps"
+      mkdir -p "$korgoNpmDeps"
+      cp --no-preserve=mode "$npmDeps/package.json" "$korgoNpmDeps/package.json"
+      cp --no-preserve=mode "$npmDeps/package-lock.json" "$korgoNpmDeps/package-lock.json"
+      substituteInPlace "$korgoNpmDeps/package.json" \
+        --replace-fail '"nanoid@^3":"3.3.18"' '"nanoid@^3":"$nanoid"'
+      npmDeps="$korgoNpmDeps"
+    '';
+
     buildPhase = ''
       runHook preBuild
       patchShebangs .
