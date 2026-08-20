@@ -76,6 +76,8 @@
     "check:lint": "npm run typecheck && npm run lint",
     "check": "npm run check:lint && npm run check:test:ui && npm run test:desktop:platforms && npm run test:desktop:all",
     "test:e2e:bot": "cross-env VITE_HERMES_DESKTOP_PRODUCT=bot HERMES_DESKTOP_PRODUCT=bot npm run build && cross-env VITE_HERMES_DESKTOP_PRODUCT=bot HERMES_DESKTOP_PRODUCT=bot playwright test e2e/bot-product.spec.ts",
+    "test:e2e:bot:linux:ssh-only": "cross-env KORGO_SSH_ONLY_PACKAGED_E2E=1 playwright test e2e/ssh-only-build-contract.spec.ts e2e/ssh-only-packaged.spec.ts e2e/gateway-proxy-packaged.spec.ts",
+    "test:e2e:bot:linux:ssh-only:contract": "playwright test e2e/ssh-only-build-contract.spec.ts e2e/ssh-only-packaged.spec.ts e2e/gateway-proxy-packaged.spec.ts --list",
     "test:e2e": "npm run build && playwright test e2e/",
     "test:e2e:visual": "npm run build && WLR_BACKENDS=headless WLR_NO_HARDWARE_CURSORS=1 cage -- npx playwright test e2e/ --reporter=list",
     "test:e2e:update-snapshots": "npm run build && WLR_BACKENDS=headless WLR_NO_HARDWARE_CURSORS=1 cage -- npx playwright test e2e/ --reporter=list --update-snapshots"

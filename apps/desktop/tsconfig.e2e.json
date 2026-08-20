@@ -4,6 +4,11 @@
     "types": ["node", "@playwright/test"],
     "composite": true
   },
-  "include": ["e2e", "playwright.config.ts"],
-  "exclude": ["src", "electron"]
+  "include": [
+    "e2e",
+    "playwright.config.ts",
+    "electron/gateway-proxy.ts",
+    "src/lib/native-gateway-socket.ts",
+    "../shared/src"
+  ]
 }

@@ -32,6 +32,9 @@ export default defineConfig({
    * per test gives us headroom without masking real hangs. */
   timeout: 90_000,
   retries: process.env.CI ? 1 : 0,
+  /* Packaged SSH-only tests share fixed contained dummy inputs and emit one
+   * evidence set. Serial workers keep those observations deterministic. */
+  workers: process.env.KORGO_SSH_ONLY_PACKAGED_E2E === '1' ? 1 : undefined,
   /* Each test gets its own worker so the Electron process is fully isolated. */
   fullyParallel: false,
   reporter: reporters,
