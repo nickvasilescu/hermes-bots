@@ -2306,6 +2306,29 @@ export interface Translations {
       screenAria: string
       setupTitle: string
       setupDescription: string
+      agent: string
+      agentPlaceholder: string
+      agentIsolation: string
+      switchingAgent: string
+      noAgents: string
+      workspace: string
+      workspacePlaceholder: string
+      findWorkspaces: string
+      findingWorkspaces: string
+      noWorkspaces: string
+      loadInventory: string
+      loadingInventory: string
+      refreshInventory: string
+      searchInventory: string
+      inventoryScopeHint: string
+      inventorySummary: (workspaces: number, computers: number) => string
+      inventoryMatches: (count: number) => string
+      inventoryListLabel: string
+      computer: string
+      computerPlaceholder: string
+      noComputers: string
+      sharedComputer: (profile: string) => string
+      useSharedComputer: string
       computerId: string
       computerIdPlaceholder: string
       apiKey: string

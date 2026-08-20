@@ -8,6 +8,7 @@ import {
   normalizeOrgoComputerId,
   privateOrgoWebsocketUrl,
   resolveOrgoDesktopProfile,
+  resolveOrgoDesktopProfiles,
   serializeOrgoDesktopError
 } from './orgo-desktop'
 import type { OrgoDesktopError } from './orgo-desktop'
@@ -68,6 +69,20 @@ test('inherits the default desktop binding unless an agent has an explicit overr
     entry: undefined,
     inheritedFromDefault: false
   })
+})
+
+test('resolves every agent to its own explicit Orgo binding before falling back', () => {
+  const profiles = {
+    default: { computerId: 'shared-computer', workspaceId: 'shared-workspace' },
+    researcher: { computerId: 'research-computer', workspaceId: 'research-workspace' },
+    support: { computerId: 'support-computer', workspaceId: 'support-workspace' }
+  }
+
+  assert.deepEqual(resolveOrgoDesktopProfiles(profiles, ['researcher', 'support', 'unassigned']), [
+    { profile: 'researcher', entry: profiles.researcher, inheritedFromDefault: false },
+    { profile: 'support', entry: profiles.support, inheritedFromDefault: false },
+    { profile: 'unassigned', entry: profiles.default, inheritedFromDefault: true }
+  ])
 })
 
 test('fetches fresh computer metadata and VNC credentials without exposing the API key in the result', async () => {

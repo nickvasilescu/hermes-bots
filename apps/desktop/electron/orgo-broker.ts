@@ -105,6 +105,11 @@ export interface OrgoComputerSummary {
   templateRef?: string
 }
 
+export interface OrgoInventory {
+  workspaces: OrgoWorkspaceSummary[]
+  computers: OrgoComputerSummary[]
+}
+
 export interface OrgoMcpEntry {
   command: string
   args: string[]
@@ -457,6 +462,70 @@ export async function listOrgoComputers(
   const workspace = unwrapRecord(payload, ['workspace', 'data', 'project'])
 
   return unwrapList(workspace, ['computers', 'desktops']).map(asComputer).filter(Boolean) as OrgoComputerSummary[]
+}
+
+/** Load every workspace and computer the supplied key is allowed to see.
+ *
+ * Orgo owns the authorization boundary: an account-wide key returns the
+ * account's owned/shared workspaces, while a workspace-scoped key returns only
+ * its workspace. The desktop never widens that result or infers a role from
+ * local profile state.
+ *
+ * Some Orgo deployments embed computers in GET /workspaces and some return
+ * workspace summaries only. Reuse embedded lists when present, then fetch only
+ * the missing workspace details in small parallel batches.
+ */
+export async function listOrgoInventory(
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<OrgoInventory> {
+  const payload = await orgoRequest(apiKey, '/workspaces', {}, fetchImpl)
+  const records = unwrapList(payload, ['workspaces', 'data', 'projects'])
+  const workspaces = records.map(asWorkspace).filter(Boolean) as OrgoWorkspaceSummary[]
+  const embedded = new Map<string, OrgoComputerSummary[]>()
+
+  for (const value of records) {
+    const record = unwrapRecord(value, ['workspace', 'data', 'project'])
+    const workspace = asWorkspace(record)
+
+    if (!workspace) {
+      continue
+    }
+
+    const hasEmbeddedList = Array.isArray(record.computers) || Array.isArray(record.desktops)
+
+    if (hasEmbeddedList) {
+      const computers = unwrapList(record, ['computers', 'desktops'])
+        .map(asComputer)
+        .filter(Boolean)
+        .map(computer => ({ ...computer, workspaceId: computer?.workspaceId || workspace.id })) as OrgoComputerSummary[]
+
+      embedded.set(workspace.id, computers)
+    }
+  }
+
+  const computers: OrgoComputerSummary[] = []
+  const missing = workspaces.filter(workspace => !embedded.has(workspace.id))
+
+  for (let index = 0; index < missing.length; index += 6) {
+    const batch = missing.slice(index, index + 6)
+
+    const loaded = await Promise.all(
+      batch.map(async workspace => {
+        const available = await listOrgoComputers(apiKey, workspace.id, fetchImpl)
+
+        return available.map(computer => ({ ...computer, workspaceId: computer.workspaceId || workspace.id }))
+      })
+    )
+
+    computers.push(...loaded.flat())
+  }
+
+  for (const workspace of workspaces) {
+    computers.push(...(embedded.get(workspace.id) || []))
+  }
+
+  return { workspaces, computers }
 }
 
 export async function resolveHermesAgentTemplateRef(

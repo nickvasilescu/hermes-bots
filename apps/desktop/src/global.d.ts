@@ -110,6 +110,7 @@ declare global {
       orgoDesktop: {
         getConfig: (profile?: null | string) => Promise<DesktopOrgoConfig>
         saveConfig: (payload: DesktopOrgoConfigInput) => Promise<DesktopOrgoConfig>
+        clearConfig: (profile?: null | string) => Promise<DesktopOrgoConfig>
         getSession: (profile?: null | string) => Promise<DesktopOrgoSessionResult>
         saveKey: (key: string) => Promise<DesktopOrgoConfig>
         status: () => Promise<DesktopOrgoConfig>
@@ -125,8 +126,9 @@ declare global {
           message: string
         }>
         syncProfiles: (profiles: string[]) => Promise<{ synced: number; computerId: string }>
-        listWorkspaces: () => Promise<Array<{ id: string; name: string; status?: string }>>
-        listComputers: (workspaceId?: string) => Promise<Array<{ id: string; name: string; status: string }>>
+        listInventory: (request?: DesktopOrgoDiscoveryRequest) => Promise<DesktopOrgoInventory>
+        listWorkspaces: (request?: DesktopOrgoDiscoveryRequest) => Promise<DesktopOrgoWorkspace[]>
+        listComputers: (request?: DesktopOrgoDiscoveryRequest) => Promise<DesktopOrgoComputer[]>
         tailscaleLocalStatus: () => Promise<DesktopTailscaleStatus>
         openTailscale: () => Promise<{ opened: boolean; installed: boolean; error: string }>
         beginTailscale: () => Promise<DesktopTailscaleStatus>
@@ -682,8 +684,34 @@ export interface DesktopOrgoConfig {
 export interface DesktopOrgoConfigInput {
   profile?: null | string
   computerId: string
+  workspaceId?: string
   /** Omit or leave blank to preserve the encrypted key already on disk. */
   apiKey?: string
+}
+
+export interface DesktopOrgoDiscoveryRequest {
+  /** A freshly entered key may be used for discovery without returning it to the renderer. */
+  apiKey?: string
+  profile?: null | string
+  workspaceId?: string
+}
+
+export interface DesktopOrgoWorkspace {
+  id: string
+  name: string
+  status?: string
+}
+
+export interface DesktopOrgoComputer {
+  id: string
+  name: string
+  status: string
+  workspaceId?: string
+}
+
+export interface DesktopOrgoInventory {
+  workspaces: DesktopOrgoWorkspace[]
+  computers: DesktopOrgoComputer[]
 }
 
 export interface DesktopTailscaleStatus {

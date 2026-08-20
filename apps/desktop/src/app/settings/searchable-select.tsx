@@ -39,6 +39,7 @@ export function rankSearchOption(option: string, search: string): number {
  * `ConfigField` routes here when `schema.searchable === true`.
  */
 export function SearchableSelect({
+  ariaLabel,
   value,
   onChange,
   options,
@@ -46,6 +47,7 @@ export function SearchableSelect({
   emptyMessage = 'No results found.',
   clearLabel
 }: {
+  ariaLabel?: string
   value: string
   onChange: (value: string) => void
   options: string[]
@@ -74,6 +76,7 @@ export function SearchableSelect({
         <button
           aria-expanded={open}
           aria-haspopup="listbox"
+          aria-label={ariaLabel}
           className={cn(
             controlVariants(),
             'flex items-center justify-between gap-2 whitespace-nowrap',

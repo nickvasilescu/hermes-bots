@@ -193,6 +193,7 @@ import {
   findOrCreateSharedHermesComputer,
   getOrgoTailscaleStatus,
   listOrgoComputers,
+  listOrgoInventory,
   listOrgoWorkspaces,
   ORGO_AGENT_MCP_SERVER_NAME,
   ORGO_MCP_SERVER_NAME,
@@ -208,6 +209,7 @@ import {
   fetchOrgoDesktopSession,
   normalizeOptionalOrgoComputerId,
   resolveOrgoDesktopProfile,
+  resolveOrgoDesktopProfiles,
   serializeOrgoDesktopError
 } from './orgo-desktop'
 import { createKeepAwake } from './power-save'
@@ -7091,15 +7093,36 @@ function writeOrgoDesktopConfig(config) {
   writeSecretFileAtomic(DESKTOP_ORGO_CONFIG_PATH, JSON.stringify(config, null, 2))
 }
 
-function orgoBackendEnv() {
+function orgoBackendEnv(profile = 'default') {
   try {
-    const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, 'default').entry
+    const key = orgoDesktopProfileKey(profile)
+    const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, key).entry
     const apiKey = decryptDesktopSecret(entry?.apiKey)
 
     return orgoProcessEnv({ apiKey, computerId: entry?.computerId || '' })
   } catch {
     return {}
   }
+}
+
+/** A profile's Orgo key is injected only into its local backend process. When
+ * the binding changes, restart exactly that backend so `${env:ORGO_API_KEY}`
+ * resolves to the new credential without ever writing the key into config.yaml.
+ * Remote gateways own their own process environment and are left untouched. */
+async function rehomeLocalOrgoBackend(profile) {
+  if (globalRemoteActive() || profileHasRemoteOverride(profile)) {
+    return false
+  }
+
+  const route = resolveProfileBackendRoute(profile, profileRouteOptions(profile))
+
+  if (route.backend === 'primary') {
+    await teardownPrimaryBackendAndWait({ soft: true })
+  } else {
+    await teardownPoolBackendAndWait(profile)
+  }
+
+  return true
 }
 
 async function upsertOrgoMcp(profile, computerId) {
@@ -7163,25 +7186,40 @@ async function listOrgoSyncProfiles() {
 
 async function syncOrgoMcpToProfiles(profileNames) {
   const names = profileNames?.length ? profileNames : await listOrgoSyncProfiles()
-  const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, 'default').entry
-  const computerId = entry?.computerId
-  const apiKey = decryptDesktopSecret(entry?.apiKey)
+  const profiles = readOrgoDesktopConfig().profiles
+  const bindings = resolveOrgoDesktopProfiles(profiles, names)
+  const preparedComputers = new Set<string>()
   let synced = 0
 
-  if (!computerId || !apiKey) {
-    return { synced: 0, computerId: '' }
-  }
+  for (const { profile, entry } of bindings) {
+    const computerId = entry?.computerId
+    const apiKey = decryptDesktopSecret(entry?.apiKey)
 
-  await ensureOrgoAgentMcpServer(apiKey, computerId, () =>
-    readBundledOrgoAgentMcpBytes(APP_ROOT, process.resourcesPath)
-  )
+    if (!computerId || !apiKey) {
+      // A direct key-only binding intentionally isolates this agent while the
+      // user chooses a computer. Remove stale Orgo tools, but do not wake every
+      // never-configured profile merely to confirm that nothing is installed.
+      if (profiles[profile]) {
+        await removeOrgoMcp(profile)
+      }
 
-  for (const profile of names) {
+      continue
+    }
+
+    const preparationKey = `${apiKey}\u0000${computerId}`
+
+    if (!preparedComputers.has(preparationKey)) {
+      await ensureOrgoAgentMcpServer(apiKey, computerId, () =>
+        readBundledOrgoAgentMcpBytes(APP_ROOT, process.resourcesPath)
+      )
+      preparedComputers.add(preparationKey)
+    }
+
     await upsertOrgoMcp(profile, computerId)
     synced += 1
   }
 
-  return { synced, computerId }
+  return { synced, computerId: profiles.default?.computerId || '' }
 }
 
 function sanitizeOrgoDesktopConfig(profile) {
@@ -7195,17 +7233,20 @@ function sanitizeOrgoDesktopConfig(profile) {
     apiKeySet: Boolean(entry?.apiKey?.value),
     inheritedFromDefault,
     profile: key,
-    shared: true
+    shared: inheritedFromDefault
   }
 }
 
-function saveOrgoDesktopConfig(payload) {
+async function saveOrgoDesktopConfig(payload) {
   const profile = orgoDesktopProfileKey(payload?.profile)
   const computerId = normalizeOptionalOrgoComputerId(payload?.computerId)
   const config = readOrgoDesktopConfig()
   const current = resolveOrgoDesktopProfile(config.profiles, profile).entry
   const apiKeyValue = String(payload?.apiKey ?? '').trim()
   const apiKey = apiKeyValue ? encryptDesktopSecret(apiKeyValue) : current?.apiKey
+
+  const environmentChanged =
+    decryptDesktopSecret(current?.apiKey) !== decryptDesktopSecret(apiKey) || current?.computerId !== computerId
 
   if (!apiKey?.value) {
     throw new Error('Enter an Orgo API key.')
@@ -7217,6 +7258,49 @@ function saveOrgoDesktopConfig(payload) {
     workspaceId: String(payload?.workspaceId || current?.workspaceId || '').trim()
   }
   writeOrgoDesktopConfig(config)
+
+  const rehomed = environmentChanged ? await rehomeLocalOrgoBackend(profile) : false
+
+  try {
+    await syncOrgoMcpToProfiles([profile])
+  } finally {
+    if (rehomed) {
+      sendConnectionApplied()
+    }
+  }
+
+  return sanitizeOrgoDesktopConfig(profile)
+}
+
+async function clearOrgoDesktopConfig(profileValue) {
+  const profile = orgoDesktopProfileKey(profileValue)
+  const config = readOrgoDesktopConfig()
+  const current = config.profiles[profile]
+  const fallback = profile === 'default' ? undefined : config.profiles.default
+
+  const environmentChanged = Boolean(
+    current &&
+    (decryptDesktopSecret(current.apiKey) !== decryptDesktopSecret(fallback?.apiKey) ||
+      current.computerId !== fallback?.computerId)
+  )
+
+  if (current) {
+    await removeOrgoMcp(profile)
+    delete config.profiles[profile]
+    writeOrgoDesktopConfig(config)
+  }
+
+  const rehomed = environmentChanged ? await rehomeLocalOrgoBackend(profile) : false
+
+  // A named profile may deliberately return to the legacy shared binding.
+  // Reinstall that inherited mapping after removing the explicit one.
+  try {
+    await syncOrgoMcpToProfiles([profile])
+  } finally {
+    if (rehomed) {
+      sendConnectionApplied()
+    }
+  }
 
   return sanitizeOrgoDesktopConfig(profile)
 }
@@ -8747,7 +8831,7 @@ async function spawnPoolBackend(profile, entry) {
         ...process.env,
         HERMES_HOME,
         ...backend.env,
-        ...orgoBackendEnv(),
+        ...orgoBackendEnv(profile),
         // Pin the gateway's tool/terminal cwd to the same directory we chose for
         // the child process. Inherited TERMINAL_CWD (or a stale config bridge)
         // can still point at the install dir even when spawn cwd is home.
@@ -9049,7 +9133,7 @@ async function startHermes() {
           // can't reliably do that, so we set it inline for every spawn.
           HERMES_HOME,
           ...backend.env,
-          ...orgoBackendEnv(),
+          ...orgoBackendEnv(activeProfile || 'default'),
           TERMINAL_CWD: hermesCwd,
           HERMES_DASHBOARD_SESSION_TOKEN: token,
           // Marks this dashboard backend as desktop-spawned so it runs the cron
@@ -10914,6 +10998,7 @@ ipcMain.handle('hermes:boot-progress:get', async () => bootProgressState)
 ipcMain.handle('hermes:bootstrap:get', async () => getBootstrapState())
 ipcMain.handle('hermes:orgo-desktop:config:get', async (_event, profile) => sanitizeOrgoDesktopConfig(profile))
 ipcMain.handle('hermes:orgo-desktop:config:save', async (_event, payload) => saveOrgoDesktopConfig(payload))
+ipcMain.handle('hermes:orgo-desktop:config:clear', async (_event, profile) => clearOrgoDesktopConfig(profile))
 ipcMain.handle('hermes:orgo-desktop:session', async (_event, profile) => createOrgoDesktopSession(profile))
 ipcMain.handle('hermes:orgo-desktop:key:save', async (_event, key) => saveOrgoApiKey(key))
 ipcMain.handle('hermes:orgo-desktop:status', async () => sanitizeOrgoDesktopConfig('default'))
@@ -10944,10 +11029,14 @@ ipcMain.handle('hermes:orgo-desktop:doctor', async () => {
 
   return doctorOrgoComputer(apiKey, entry?.computerId || '')
 })
-ipcMain.handle('hermes:orgo-desktop:sync', async (_event, profiles) => syncOrgoMcpToProfiles(Array.isArray(profiles) ? profiles : []))
-ipcMain.handle('hermes:orgo-desktop:workspaces', async () => {
-  const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, 'default').entry
-  const apiKey = decryptDesktopSecret(entry?.apiKey)
+ipcMain.handle('hermes:orgo-desktop:sync', async (_event, profiles) =>
+  syncOrgoMcpToProfiles(Array.isArray(profiles) ? profiles : [])
+)
+ipcMain.handle('hermes:orgo-desktop:workspaces', async (_event, rawRequest) => {
+  const request = rawRequest && typeof rawRequest === 'object' ? rawRequest : {}
+  const profile = orgoDesktopProfileKey(request.profile)
+  const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, profile).entry
+  const apiKey = String(request.apiKey || '').trim() || decryptDesktopSecret(entry?.apiKey)
 
   if (!apiKey) {
     throw new Error('Enter an Orgo API key.')
@@ -10955,15 +11044,36 @@ ipcMain.handle('hermes:orgo-desktop:workspaces', async () => {
 
   return listOrgoWorkspaces(apiKey)
 })
-ipcMain.handle('hermes:orgo-desktop:computers', async (_event, workspaceId) => {
-  const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, 'default').entry
-  const apiKey = decryptDesktopSecret(entry?.apiKey)
+ipcMain.handle('hermes:orgo-desktop:inventory', async (_event, rawRequest) => {
+  const request = rawRequest && typeof rawRequest === 'object' ? rawRequest : {}
+  const profile = orgoDesktopProfileKey(request.profile)
+  const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, profile).entry
+  const apiKey = String(request.apiKey || '').trim() || decryptDesktopSecret(entry?.apiKey)
 
   if (!apiKey) {
     throw new Error('Enter an Orgo API key.')
   }
 
-  return listOrgoComputers(apiKey, workspaceId || entry?.workspaceId)
+  return listOrgoInventory(apiKey)
+})
+ipcMain.handle('hermes:orgo-desktop:computers', async (_event, rawRequest) => {
+  // Accept the old bare workspace ID for compatibility with an older renderer.
+  const request =
+    typeof rawRequest === 'string'
+      ? { workspaceId: rawRequest }
+      : rawRequest && typeof rawRequest === 'object'
+        ? rawRequest
+        : {}
+
+  const profile = orgoDesktopProfileKey(request.profile)
+  const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, profile).entry
+  const apiKey = String(request.apiKey || '').trim() || decryptDesktopSecret(entry?.apiKey)
+
+  if (!apiKey) {
+    throw new Error('Enter an Orgo API key.')
+  }
+
+  return listOrgoComputers(apiKey, request.workspaceId || entry?.workspaceId)
 })
 ipcMain.handle('hermes:connectors:key:status', async () => withComposioBroker(broker => broker.keyStatus()))
 ipcMain.handle('hermes:connectors:key:save', async (_event, key) => withComposioBroker(broker => broker.saveKey(key)))
