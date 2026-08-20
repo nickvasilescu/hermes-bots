@@ -15,9 +15,12 @@ This directory contains the runtime boundary used by
   environment, and network assertion tool. The launcher accepts the fixed
   `--containment-probe` switch; it never accepts an arbitrary command.
 - `korgo-ssh-client-no-dbus-smoke` starts the built Electron artifact inside a
-  separate Xvfb/bubblewrap test sandbox and requires it to stay alive without
-  any session D-Bus transport. It is a build-time test, not an installed
-  launcher mode.
+  separate Xvfb/bubblewrap test sandbox, requires it to stay alive without any
+  session D-Bus transport, and verifies that the packaged `korgo-app:` renderer
+  rejects both fetch and XHR reads of a dummy identity mounted at the production
+  path. Its ephemeral CDP endpoint exists only inside this dummy-input test; the
+  production artifact and launcher must contain no remote-debugging marker. It
+  is a build-time test, not an installed launcher mode.
 - `korgo-ssh-client.service` is a fail-closed syntax/reference policy. It has an
   inert `ExecStart` and no Mini allow rule. The NixOS module generates the
   operational system service only after the reviewed user, UID, secret source

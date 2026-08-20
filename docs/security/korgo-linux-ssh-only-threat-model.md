@@ -29,6 +29,12 @@ less-trusted plugins/content, or a generic remote-desktop SKU.
 - Neither the session nor system D-Bus socket is mounted, and
   `DBUS_SESSION_BUS_ADDRESS` is absent. Same-user Secret Service, portals, and
   the user systemd manager are outside the client boundary.
+- The packaged renderer loads from the secure `korgo-app://bundle` origin, whose
+  protocol handler serves only real files below the immutable renderer bundle.
+  Its CSP has no loopback connection source, and the SSH SKU contains no
+  arbitrary file-read, attachment-read, Git, or terminal renderer IPC surface.
+- A dummy-input packaged smoke must prove that both fetch and XHR reject
+  `file:///run/korgo-ssh/identity`; a source-only protocol test is insufficient.
 - Egress is denied except loopback and one numeric Mini Tailscale `/32` or
   `/128`. Hostnames and DNS are unnecessary.
 - Host trust is pre-seeded. `ssh-keyscan` can collect a candidate key but
@@ -47,12 +53,12 @@ less-trusted plugins/content, or a generic remote-desktop SKU.
 | T02 | Identity/known-host tampering | Mitigate with exact read-only binds plus regular-file, owner, mode, manifest, and fingerprint checks in the same `ExecStart` mount namespace that launches the client. |
 | T03 | Unreviewed cutover | Mitigate with reviewed Git/artifact hashes plus explicit G4 and G6 records in the non-secret evidence manifest. |
 | T04 | Transient gateway credential in renderer | Remains a High residual only if Carter records `ACCEPT-INCREMENTAL` at G4 for this topology. Otherwise the main-process proxy is mandatory before credentials. |
-| T05 | Host secret disclosure | Mitigate with exact bwrap mounts, a cleared environment, synthetic home, no agent, and the G3 dummy read-denial matrix. |
+| T05 | Host secret disclosure | Mitigate with exact bwrap mounts, a cleared environment, synthetic home, no agent, compile-time removal of arbitrary renderer file/Git/terminal IPC, and a packaged dummy-identity fetch/XHR denial test. |
 | T06 | Retry/bootstrap denial of service | Bound reconnect/restart attempts and fail closed; never fall back to local install/bootstrap. |
-| T07 | Renderer/guest privilege escalation | Require registered top-level IPC authorization, isolated untrusted content, CSP, no open CDP, and packaged malicious-context evidence. |
+| T07 | Renderer/guest privilege escalation | Require registered top-level IPC authorization, a bundle-confined secure custom origin, isolated untrusted content, narrowed CSP, no production CDP, and packaged malicious-context evidence. |
 | T08 | Orgo/Composio/unlocked installer execution | Eliminate from this compile-time SKU and require a zero-finding bundle scan. |
 | T09 | Link-driven SSRF | Eliminate automatic title-fetch requests and prove zero request from rendered assistant links. |
-| T10 | Chromium sandbox bypass | Keep Chromium sandboxing active; reject `--no-sandbox`, sandbox fallback, setuid/FUSE workarounds, and open CDP. |
+| T10 | Chromium sandbox bypass | Keep Chromium sandboxing active; reject `--no-sandbox`, sandbox fallback, setuid/FUSE workarounds, and production CDP. The dummy-identity smoke may open one ephemeral loopback CDP endpoint inside its isolated test sandbox and must terminate it on exit. |
 | T11 | Preview/webview escape | Enforce preferences in main, deny guest IPC/media, and use no persistent guest partition. |
 | T12 | Media permission disclosure | Admit only the registered trusted top-level origin and exact media type; deny guests. |
 | T13 | Unexpected network egress | Use a system service so the system manager owns `IPAddressDeny=any`; prove actual unit properties and the G3/G5/G7 network matrices. |
@@ -80,6 +86,8 @@ not recorded.
 Stop before launch on a missing/mismatched host key, wrong Hermes
 version/commit/schema, missing package evidence, ignored IP controls, readable
 host marker, inherited agent socket, visible session/system D-Bus transport,
-unexpected egress, local/bootstrap trace, disabled Chromium sandbox, open CDP,
-untrusted IPC side effect, or a secret in logs/evidence/Git. Revoke the
-dedicated key if it was ever mounted during a failed staged/live test.
+unexpected egress, local/bootstrap trace, disabled Chromium sandbox, open
+production CDP, untrusted IPC side effect, or a secret in logs/evidence/Git.
+The isolated dummy-input smoke described under T10 is the sole CDP exception.
+Revoke the dedicated key if it was ever mounted during a failed staged/live
+test.

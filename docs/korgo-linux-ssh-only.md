@@ -88,7 +88,7 @@ credential-bearing logs into the evidence manifest.
    korgo_package="$(nix build .#korgo-ssh-client --no-link --print-out-paths)"
    nix shell --inputs-from . \
      nixpkgs#bash nixpkgs#bubblewrap nixpkgs#coreutils nixpkgs#gnugrep \
-     nixpkgs#gnused nixpkgs#xorg.xorgserver \
+     nixpkgs#gnused nixpkgs#nodejs_24 nixpkgs#xorg-server \
      --command ./packaging/korgo-ssh-client/korgo-ssh-client-no-dbus-smoke \
      "$korgo_package"
    ```
@@ -97,13 +97,20 @@ Expected: the source build uses the committed lockfile and fixed Electron
 distribution/headers, reports Electron 43.4.1, produces an unpacked runtime
 instead of using FUSE, and the bundle/security scans have zero banned findings.
 The bubblewrap/Xvfb smoke must keep Electron alive for eight seconds with no
-session D-Bus transport. Complete the full type/lint/unit/package matrix and
-record the AppImage and `linux-unpacked` SHA256 values required by G2. No real
-identity, known-hosts, or Mini access is allowed yet.
+session D-Bus transport. It mounts only a disposable sentinel at the production
+identity path and must also report that the packaged `korgo-app:` renderer
+rejects both fetch and XHR reads of that sentinel. The smoke opens an ephemeral
+loopback CDP endpoint only inside this dummy-input sandbox so it can evaluate the
+actual packaged page; the production artifact and launcher remain CDP-free.
+Complete the full type/lint/unit/package matrix and record the AppImage and
+`linux-unpacked` SHA256 values required by G2. No real identity, known-hosts, or
+Mini access is allowed yet.
 
 Stop if a build downloads anything not pinned, consumes `release/`, reports a
 different Electron version, omits a mandatory artifact/test, disables Chromium
-sandboxing, opens CDP, or contains local bootstrap/provider/Orgo/Composio code.
+sandboxing, leaves CDP in the production artifact or launcher, or contains
+local bootstrap/provider/Orgo/Composio code. The isolated dummy-input smoke's
+test-only CDP endpoint is the sole exception.
 
 ## G3: install and prove containment with dummy inputs
 

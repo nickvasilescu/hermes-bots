@@ -156,6 +156,7 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           unit=${../packaging/korgo-ssh-client/korgo-ssh-client.service}
           package_nix=${./korgo-ssh-client.nix}
           module_nix=${./korgo-ssh-client-module.nix}
+          verifier=${../apps/desktop/scripts/verify-ssh-only-bundle.mjs}
 
           grep -F -- '--clearenv' "$launcher"
           grep -F -- 'must run inside the korgo-ssh-client system service' "$launcher"
@@ -169,6 +170,7 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           ! grep -F -- 'dbus_socket=' "$launcher"
           ! grep -F -- '--bind "$dbus_socket" "$dbus_socket"' "$launcher"
           ! grep -F -- '--setenv DBUS_SESSION_BUS_ADDRESS "unix:path=' "$launcher"
+          ! grep -F -- 'remote-debugging' "$launcher"
           ! grep -E -- '--(ro-)?bind[^#]*(\$HOME|"\$runtime_dir"[[:space:]]+"\$runtime_dir")' "$launcher"
 
           grep -F -- 'SSH_AUTH_SOCK is present' "$probe"
@@ -183,7 +185,38 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           test -x ${korgoContainmentProbe}/bin/korgo-ssh-client-containment-probe
           test -x "$no_dbus_smoke"
           grep -F -- '--unsetenv DBUS_SESSION_BUS_ADDRESS' "$no_dbus_smoke"
+          grep -F -- '--ro-bind "$smoke_dir/identity" /run/korgo-ssh/identity' "$no_dbus_smoke"
+          grep -F -- "observed?.protocol !== 'korgo-app:'" "$no_dbus_smoke"
+          grep -F -- 'result?.resolved !== false' "$no_dbus_smoke"
+          grep -F -- 'packaged korgo-app renderer rejects fetch and XHR reads of the mounted dummy identity' "$no_dbus_smoke"
           grep -F -- 'bubblewrapped Electron remained alive for 8s without a session D-Bus transport' "$no_dbus_smoke"
+
+          # Pin the source verifier's compile-time/artifact boundary. The
+          # package check below executes this verifier over the exact tree that
+          # is installed, so removing a marker cannot silently weaken the scan.
+          for marker in \
+            hermes:readFileDataUrl \
+            hermes:readFileDataUrlForAttach \
+            hermes:readFileText \
+            hermes:data-url-read-max \
+            hermes:selectPaths \
+            hermes:selectSavePath \
+            hermes:fs: \
+            hermes:git: \
+            hermes:terminal: \
+            hermes:window:readBelow \
+            hermes:openExternal \
+            hermes:openPreviewInBrowser \
+            readFileDataUrl \
+            readFileDataUrlForAttach \
+            readFileText \
+            hermesDesktop.openExternal \
+            /api/fs/ \
+            /api/git/ \
+            /api/files/download; do
+            grep -F -- "'$marker'" "$verifier"
+          done
+          grep -F -- "BANNED_RENDERER_HTML_MARKERS = Object.freeze(['http://127.0.0.1:*', 'ws://127.0.0.1:*'])" "$verifier"
 
           grep -F 'electronVersion = "43.4.1";' "$package_nix"
           grep -F 'electron-v''${electronVersion}-linux-x64.zip' "$package_nix"

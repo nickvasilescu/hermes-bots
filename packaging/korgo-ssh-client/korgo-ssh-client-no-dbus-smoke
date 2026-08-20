@@ -16,7 +16,7 @@ app="$package_path/libexec/korgo-ssh-client/Korgo Bot"
 
 command -v bwrap >/dev/null || fail "bubblewrap is required"
 command -v Xvfb >/dev/null || fail "Xvfb is required"
-command -v timeout >/dev/null || fail "timeout is required"
+command -v node >/dev/null || fail "Node.js is required"
 
 grep -F -- '--unsetenv DBUS_SESSION_BUS_ADDRESS' "$launcher" >/dev/null ||
   fail "installed launcher does not explicitly remove the session-bus address"
@@ -33,13 +33,24 @@ fontconfig_file="$(
 
 smoke_dir="$(mktemp -d)"
 xvfb_pid=""
+app_pid=""
 cleanup() {
+  if [[ -n "$app_pid" ]]; then
+    kill "$app_pid" 2>/dev/null || true
+    wait "$app_pid" 2>/dev/null || true
+  fi
   if [[ -n "$xvfb_pid" ]]; then
     kill "$xvfb_pid" 2>/dev/null || true
   fi
   rm -rf -- "$smoke_dir"
 }
 trap cleanup EXIT
+
+# The runtime boundary binds a private key at this exact path. This smoke uses
+# a disposable non-key sentinel and fails if the packaged renderer can read it.
+identity_sentinel='KORGO_SSH_ONLY_DUMMY_IDENTITY_FETCH_MUST_FAIL'
+printf '%s\n' "$identity_sentinel" >"$smoke_dir/identity"
+chmod 0600 "$smoke_dir/identity"
 
 display_file="$smoke_dir/display"
 Xvfb -displayfd 3 -screen 0 1280x800x24 -nolisten tcp -ac \
@@ -58,8 +69,7 @@ done
   fail "Xvfb did not create a display socket"
 
 uid="$(id -u)"
-set +e
-timeout 8s bwrap \
+bwrap \
   --die-with-parent \
   --new-session \
   --unshare-all \
@@ -82,6 +92,8 @@ timeout 8s bwrap \
   --dir /var/cache \
   --dir /var/cache/korgo-smoke \
   --dir /run \
+  --dir /run/korgo-ssh \
+  --ro-bind "$smoke_dir/identity" /run/korgo-ssh/identity \
   --dir /run/user \
   --dir "/run/user/$uid" \
   --setenv HOME /var/empty \
@@ -97,15 +109,113 @@ timeout 8s bwrap \
   --setenv LANG C.UTF-8 \
   --setenv LC_ALL C.UTF-8 \
   --setenv TMPDIR /tmp \
-  -- "$app" --disable-gpu --disable-dev-shm-usage \
-  >"$smoke_dir/app.log" 2>&1
-status=$?
-set -e
+  -- "$app" --disable-gpu --disable-dev-shm-usage --remote-debugging-port=0 \
+  >"$smoke_dir/app.log" 2>&1 &
+app_pid=$!
 
-if [[ "$status" -ne 124 ]]; then
+# CDP is opened only inside this dummy-input smoke and only for the lifetime of
+# the isolated process. The production artifact and launcher are separately
+# scanned to reject every remote-debugging marker.
+devtools_url=""
+for _ in $(seq 1 200); do
+  if ! kill -0 "$app_pid" 2>/dev/null; then
+    cat "$smoke_dir/app.log" >&2
+    fail "bubblewrapped Electron exited before the renderer became inspectable"
+  fi
+  devtools_url="$(sed -n 's/^DevTools listening on \(ws:\/\/[^[:space:]]*\)$/\1/p' "$smoke_dir/app.log" | head -n1)"
+  [[ -n "$devtools_url" ]] && break
+  sleep 0.05
+done
+[[ "$devtools_url" == ws://127.0.0.1:* ]] || {
   cat "$smoke_dir/app.log" >&2
-  fail "bubblewrapped Electron exited early with status $status"
-fi
+  fail "Electron did not expose its test-only DevTools endpoint"
+}
+
+cat >"$smoke_dir/probe.mjs" <<'EOF'
+const browserUrl = process.argv[2]
+const identitySentinel = process.argv[3]
+const httpOrigin = `http://${new URL(browserUrl).host}`
+let target
+
+for (let attempt = 0; attempt < 200; attempt += 1) {
+  const targets = await fetch(`${httpOrigin}/json/list`).then(response => response.json())
+  target = targets.find(item => item.type === 'page' && item.url !== 'about:blank')
+  if (target?.webSocketDebuggerUrl) break
+  await new Promise(resolve => setTimeout(resolve, 50))
+}
+
+if (!target?.webSocketDebuggerUrl) throw new Error('primary renderer target did not become available')
+
+const socket = new WebSocket(target.webSocketDebuggerUrl)
+await new Promise((resolve, reject) => {
+  socket.addEventListener('open', resolve, { once: true })
+  socket.addEventListener('error', reject, { once: true })
+})
+
+const id = 1
+const resultPromise = new Promise((resolve, reject) => {
+  const timeout = setTimeout(() => reject(new Error('CDP evaluation timed out')), 10_000)
+  socket.addEventListener('message', event => {
+    const message = JSON.parse(String(event.data))
+    if (message.id !== id) return
+    clearTimeout(timeout)
+    resolve(message)
+  })
+})
+
+const expression = `
+(async () => {
+  const fileUrl = 'file:///run/korgo-ssh/identity'
+  let fetchResult
+  try {
+    const response = await fetch(fileUrl)
+    fetchResult = { resolved: true, status: response.status, text: await response.text() }
+  } catch (error) {
+    fetchResult = { resolved: false, error: String(error) }
+  }
+
+  const xhrResult = await new Promise(resolve => {
+    const request = new XMLHttpRequest()
+    request.onload = () => resolve({ resolved: true, status: request.status, text: request.responseText })
+    request.onerror = () => resolve({ resolved: false, error: 'network error' })
+    try {
+      request.open('GET', fileUrl)
+      request.send()
+    } catch (error) {
+      resolve({ resolved: false, error: String(error) })
+    }
+  })
+
+  return { fetchResult, href: location.href, protocol: location.protocol, xhrResult }
+})()
+`
+
+socket.send(
+  JSON.stringify({
+    id,
+    method: 'Runtime.evaluate',
+    params: { awaitPromise: true, expression, returnByValue: true }
+  })
+)
+const response = await resultPromise
+socket.close()
+if (response.error || response.result?.exceptionDetails) throw new Error(JSON.stringify(response))
+const observed = response.result?.result?.value
+for (const [api, result] of Object.entries({ fetch: observed.fetchResult, xhr: observed.xhrResult })) {
+  if (result?.text?.includes(identitySentinel)) throw new Error(`${api} exposed the mounted dummy identity`)
+  if (result?.resolved !== false) throw new Error(`${api} did not reject the mounted identity request`)
+}
+if (observed?.protocol !== 'korgo-app:') throw new Error(`renderer used unsafe origin ${observed?.href || '<unknown>'}`)
+console.log('PASS: packaged korgo-app renderer rejects fetch and XHR reads of the mounted dummy identity')
+EOF
+
+node "$smoke_dir/probe.mjs" "$devtools_url" "$identity_sentinel"
+
+sleep 8
+kill -0 "$app_pid" 2>/dev/null || {
+  cat "$smoke_dir/app.log" >&2
+  fail "bubblewrapped Electron exited before the 8s startup window"
+}
 
 if grep -F -- 'FATAL:' "$smoke_dir/app.log" >/dev/null; then
   cat "$smoke_dir/app.log" >&2

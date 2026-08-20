@@ -220,8 +220,9 @@ in
 
       unitConfig = {
         # systemd has no ConditionPathIsRegular directive. Existence is a
-        # cheap unit condition; the first ExecStartPre then requires a regular,
-        # non-symlink file, strict mode/owner, manifest, and fingerprint.
+        # cheap unit condition; the same-namespace ExecStart wrapper then
+        # requires a regular, non-symlink file, strict mode/owner, manifest,
+        # and fingerprint.
         ConditionPathExists = [
           cfg.identityFile
           cfg.knownHostsFile
