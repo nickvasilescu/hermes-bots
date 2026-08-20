@@ -43,6 +43,9 @@ function electronBuilderCli() {
 const dist = electronDistDir()
 const args = []
 const isSshOnlyBuild = process.env.HERMES_DESKTOP_SKU === SSH_ONLY_SKU
+const fixedElectronDist = process.env.HERMES_DESKTOP_ELECTRON_DIST
+  ? path.resolve(process.env.HERMES_DESKTOP_ELECTRON_DIST)
+  : null
 let temporaryConfigDir = null
 
 if (!isSshOnlyBuild && dist && fs.existsSync(distBinary(dist))) {
@@ -62,10 +65,25 @@ if (isSshOnlyBuild) {
     // Report the locked-distribution failure below without allowing a fetch.
   }
 
-  if (installedVersion !== LOCKED_ELECTRON_VERSION || !dist || !fs.existsSync(distBinary(dist))) {
+  const fixedVersionPath = fixedElectronDist ? path.join(fixedElectronDist, 'version') : null
+  const fixedVersion =
+    fixedVersionPath && fs.existsSync(fixedVersionPath) ? fs.readFileSync(fixedVersionPath, 'utf8').trim() : null
+  const selectedDist = fixedElectronDist || dist
+  const hasReviewedFixedDist =
+    Boolean(fixedElectronDist) &&
+    fixedVersion === LOCKED_ELECTRON_VERSION &&
+    fs.existsSync(distBinary(fixedElectronDist))
+  const hasInstalledLockedDist =
+    !fixedElectronDist &&
+    installedVersion === LOCKED_ELECTRON_VERSION &&
+    Boolean(dist) &&
+    fs.existsSync(distBinary(dist))
+
+  if (!selectedDist || (!hasReviewedFixedDist && !hasInstalledLockedDist)) {
     console.error(
-      `[run-electron-builder] ${SSH_ONLY_SKU} requires the installed Electron ` +
-        `${LOCKED_ELECTRON_VERSION} distribution; refusing electron-builder download fallback.`
+      `[run-electron-builder] ${SSH_ONLY_SKU} requires an exact Electron ` +
+        `${LOCKED_ELECTRON_VERSION} distribution; refusing electron-builder download fallback. ` +
+        `HERMES_DESKTOP_ELECTRON_DIST may point only to a preverified fixed-output distribution.`
     )
     process.exit(1)
   }
@@ -75,7 +93,7 @@ if (isSshOnlyBuild) {
   const sshOnlyConfig = {
     ...baseConfig,
     electronVersion: LOCKED_ELECTRON_VERSION,
-    electronDist: dist,
+    electronDist: selectedDist,
     appId: 'com.nousresearch.hermes-bots',
     productName: 'Korgo Bot',
     executableName: 'Korgo Bot',

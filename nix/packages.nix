@@ -45,8 +45,22 @@
         # matrix is Linux-only (oqs/liboqs lacks aarch64-darwin wheels).
         ++ lib.optionals pkgs.stdenv.isLinux [ "matrix" ];
       };
+
+      # C11.1 pins both fixed-output inputs. Callers may override them only to
+      # perform an explicit future Electron upgrade review.
+      korgoSshClientBuilder =
+        {
+          electronArchiveHash ? "sha256-edTv1p8Mzx/BGJHqUHUynHs/rdrXmgjZ+zlbvWMWms8=",
+          electronHeadersHash ? "sha256-CyzcARd1+GhWr8ED7HBYW2MYD+tgetqZFMkaivaGvw0=",
+        }:
+        pkgs.callPackage ./korgo-ssh-client.nix {
+          inherit electronArchiveHash electronHeadersHash;
+          hermesNpmLib = full.hermesNpmLib;
+        };
     in
     {
+      legacyPackages.korgoSshClientBuilder = korgoSshClientBuilder;
+
       packages = {
         node-gyp =
           (pkgs.callPackage ./lib.nix {
@@ -70,6 +84,8 @@
         desktop = full.hermesDesktop;
 
         update-npm-lockfile = full.hermesNpmLib.updateNpmLockfile;
+      } // lib.optionalAttrs (pkgs.stdenv.hostPlatform.isLinux && pkgs.stdenv.hostPlatform.isx86_64) {
+        korgo-ssh-client = korgoSshClientBuilder { };
       };
     };
 }
