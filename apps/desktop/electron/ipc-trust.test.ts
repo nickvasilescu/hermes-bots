@@ -98,3 +98,16 @@ test('a stale disposer cannot unregister a replacement capability', () => {
 
   assert.equal(registry.identify(event, () => true)?.capability, 'session')
 })
+
+test('reports only live registered application contents', () => {
+  const registry = new IpcTrustRegistry()
+  const { sender } = fixture()
+  const dispose = registry.register(sender, 'primary')
+
+  assert.equal(registry.isRegistered(sender), true)
+  sender.isDestroyed = () => true
+  assert.equal(registry.isRegistered(sender), false)
+  sender.isDestroyed = () => false
+  dispose()
+  assert.equal(registry.isRegistered(sender), false)
+})

@@ -11,10 +11,16 @@ const ipcRenderer = {
   removeListener: () => undefined
 } as any
 
-test('SSH-only preload exposes none of the sensitive full-product properties', () => {
+test('SSH-only preload exposes only the main-owned gateway proxy integration', () => {
   const bridge = createSshOnlyBridge(ipcRenderer)
-  assert.deepEqual(bridge, {})
+  assert.deepEqual(Object.keys(bridge), ['gatewayProxy'])
+  assert.equal(typeof bridge.gatewayProxy.start, 'function')
+  assert.equal(typeof bridge.gatewayProxy.send, 'function')
+  assert.equal(typeof bridge.gatewayProxy.close, 'function')
+  assert.equal(typeof bridge.gatewayProxy.onEvent, 'function')
+
   for (const property of [
+    'getGatewayWsUrl',
     'orgoDesktop',
     'connectors',
     'cloud',
@@ -30,6 +36,8 @@ test('SSH-only preload exposes none of the sensitive full-product properties', (
 
 test('full-product preload retains its integration surface', () => {
   const bridge = createFullBridge(ipcRenderer)
+  assert.equal(typeof bridge.getGatewayWsUrl, 'function')
+  assert.equal('gatewayProxy' in bridge, false)
   assert.equal(typeof bridge.orgoDesktop.saveKey, 'function')
   assert.equal(typeof bridge.connectors.saveKey, 'function')
   assert.equal(typeof bridge.cloud.login, 'function')

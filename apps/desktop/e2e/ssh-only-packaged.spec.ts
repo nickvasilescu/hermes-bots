@@ -1,34 +1,38 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import { expect, test, type Page } from '@playwright/test'
+import { expect, type Page, test } from '@playwright/test'
 
 import {
   assertDummyPinnedInputs,
+  type FakeSshObservation,
   launchSshOnlyPackagedApp,
   readFakeSshObservations,
   SSH_ONLY_IDENTITY_PATH,
   SSH_ONLY_KNOWN_HOSTS_PATH,
   SSH_ONLY_PACKAGED_GATE,
   SSH_ONLY_TEST_HOST,
-  type FakeSshObservation,
   type SshOnlyPackagedApp,
   waitForFakeSshOperation,
   writeSshOnlyEvidence
 } from './ssh-only-packaged-fixtures'
 
 const SENTINEL = 'KORGO_E2E_SENTINEL_CREDENTIAL'
+
 const FORBIDDEN_BRIDGE_KEYS = [
   'cloud',
   'connectors',
   'fetchLinkTitle',
   'getGatewayWsUrl',
-  'gitRoot',
   'oauthLoginConnectionConfig',
   'oauthLogoutConnectionConfig',
-  'openExternal',
   'orgoDesktop',
-  'probeConnectionConfig',
+  'probeConnectionConfig'
+] as const
+
+const PRIVILEGED_PRIMARY_BRIDGE_KEYS = [
+  'gitRoot',
+  'openExternal',
   'readDir',
   'readFileDataUrl',
   'readFileText',
@@ -100,49 +104,60 @@ test.describe('packaged Korgo SSH-only runtime', () => {
       await expect(page.locator('input')).toHaveCount(6)
       expect(readFakeSshObservations(fixture.sandbox)).toEqual([])
 
-      const runtime = await page.evaluate(async forbiddenKeys => {
-        const bridge = (window as unknown as { hermesDesktop?: Record<string, unknown> }).hermesDesktop ?? {}
-        const bridgeKeys = Object.keys(bridge).sort()
-        const iframe = document.createElement('iframe')
-        iframe.srcdoc = '<!doctype html><title>untrusted subframe</title>'
-        document.body.appendChild(iframe)
-        await new Promise<void>(resolve => iframe.addEventListener('load', () => resolve(), { once: true }))
-        const iframeBridge = (iframe.contentWindow as unknown as { hermesDesktop?: Record<string, any> })?.hermesDesktop
-        let iframeReadDenied = !iframeBridge
+      const runtime = await page.evaluate(
+        async ({ forbiddenKeys, privilegedPrimaryKeys }) => {
+          const bridge = (window as unknown as { hermesDesktop?: Record<string, unknown> }).hermesDesktop ?? {}
+          const bridgeKeys = Object.keys(bridge).sort()
+          const iframe = document.createElement('iframe')
+          iframe.srcdoc = '<!doctype html><title>untrusted subframe</title>'
+          document.body.appendChild(iframe)
+          await new Promise<void>(resolve => iframe.addEventListener('load', () => resolve(), { once: true }))
 
-        if (iframeBridge?.getConnectionConfig) {
-          try {
-            await iframeBridge.getConnectionConfig(null)
-            iframeReadDenied = false
-          } catch {
-            iframeReadDenied = true
+          const iframeBridge = (iframe.contentWindow as unknown as { hermesDesktop?: Record<string, any> })
+            ?.hermesDesktop
+
+          let iframeReadDenied = !iframeBridge
+
+          if (iframeBridge?.getConnectionConfig) {
+            try {
+              await iframeBridge.getConnectionConfig(null)
+              iframeReadDenied = false
+            } catch {
+              iframeReadDenied = true
+            }
           }
-        }
 
-        const webview = document.createElement('webview') as HTMLElement & {
-          getWebContentsId?: () => number
-        }
-        webview.setAttribute('src', 'data:text/html,<title>untrusted webview</title>')
-        document.body.appendChild(webview)
+          const webview = document.createElement('webview') as HTMLElement & {
+            getWebContentsId?: () => number
+          }
 
-        return {
-          bridgeKeys,
-          forbiddenPresent: forbiddenKeys.filter(key => key in bridge),
-          gatewayProxyPresent: 'gatewayProxy' in bridge,
-          iframeBridgeKeys: iframeBridge ? Object.keys(iframeBridge) : [],
-          iframeReadDenied,
-          webviewPrivileged: typeof webview.getWebContentsId === 'function'
-        }
-      }, [...FORBIDDEN_BRIDGE_KEYS])
+          webview.setAttribute('src', 'data:text/html,<title>untrusted webview</title>')
+          document.body.appendChild(webview)
+
+          return {
+            bridgeKeys,
+            forbiddenPresent: forbiddenKeys.filter(key => key in bridge),
+            gatewayProxyPresent: 'gatewayProxy' in bridge,
+            iframeBridgeKeys: iframeBridge ? Object.keys(iframeBridge) : [],
+            iframeReadDenied,
+            privilegedPrimaryMissing: privilegedPrimaryKeys.filter(key => !(key in bridge)),
+            webviewPrivileged: typeof webview.getWebContentsId === 'function'
+          }
+        },
+        { forbiddenKeys: [...FORBIDDEN_BRIDGE_KEYS], privilegedPrimaryKeys: [...PRIVILEGED_PRIMARY_BRIDGE_KEYS] }
+      )
 
       expect(runtime.forbiddenPresent).toEqual([])
       expect(runtime.gatewayProxyPresent).toBe(true)
       expect(runtime.iframeReadDenied).toBe(true)
+      expect(runtime.privilegedPrimaryMissing).toEqual([])
       expect(runtime.webviewPrivileged).toBe(false)
       expect(readFakeSshObservations(fixture.sandbox)).toEqual([])
 
       const hermesFiles = fs.readdirSync(fixture.sandbox.hermesHome, { recursive: true }).map(String)
-      expect(hermesFiles.some(name => /(?:^|\/)(?:\.venv|install-stamp\.json|hermes-agent)(?:\/|$)/.test(name))).toBe(false)
+      expect(hermesFiles.some(name => /(?:^|\/)(?:\.venv|install-stamp\.json|hermes-agent)(?:\/|$)/.test(name))).toBe(
+        false
+      )
 
       writeSshOnlyEvidence('first-run-fail-closed', {
         bridgeKeys: runtime.bridgeKeys,
@@ -150,6 +165,7 @@ test.describe('packaged Korgo SSH-only runtime', () => {
         iframeBridgeKeys: runtime.iframeBridgeKeys,
         iframeReadDenied: runtime.iframeReadDenied,
         localRuntimeMarkersPresent: false,
+        privilegedPrimaryBridgeKeysPresent: runtime.privilegedPrimaryMissing.length === 0,
         sshInvocationsBeforeConfiguration: 0,
         webviewPrivileged: runtime.webviewPrivileged
       })
@@ -164,6 +180,7 @@ test.describe('packaged Korgo SSH-only runtime', () => {
     try {
       fixture = await launchSshOnlyPackagedApp('success')
       await fixture.page.locator('#ssh-only-host').waitFor({ state: 'visible' })
+
       const result = await fixture.page.evaluate(async () => {
         const directives: string[] = []
         const listener = (event: SecurityPolicyViolationEvent) => directives.push(event.effectiveDirective)
@@ -185,7 +202,9 @@ test.describe('packaged Korgo SSH-only runtime', () => {
         return {
           directives,
           fetchRejected,
-          inlineExecuted: Boolean((window as unknown as { __KORGO_CSP_INLINE_EXECUTED__?: boolean }).__KORGO_CSP_INLINE_EXECUTED__)
+          inlineExecuted: Boolean(
+            (window as unknown as { __KORGO_CSP_INLINE_EXECUTED__?: boolean }).__KORGO_CSP_INLINE_EXECUTED__
+          )
         }
       })
 
@@ -233,8 +252,14 @@ test.describe('packaged Korgo SSH-only runtime', () => {
 
       for (const [name, active] of Object.entries({ unknown, changed, unreachable })) {
         const operations = active ? readFakeSshObservations(active.sandbox) : []
-        expect(operations.some(item => item.operation === 'token-upload' || item.operation === 'remote-start')).toBe(false)
-        if (operations.length > 0) expectStrictSsh(operations)
+        expect(operations.some(item => item.operation === 'token-upload' || item.operation === 'remote-start')).toBe(
+          false
+        )
+
+        if (operations.length > 0) {
+          expectStrictSsh(operations)
+        }
+
         operationSets[name] = operations.map(item => item.operation)
       }
 
@@ -309,10 +334,14 @@ test.describe('packaged Korgo SSH-only runtime', () => {
       const renderer = await fixture.page.evaluate(() => {
         const bridge = (window as unknown as { hermesDesktop?: Record<string, unknown> }).hermesDesktop ?? {}
         const storage: string[] = []
+
         for (const target of [localStorage, sessionStorage]) {
           for (let index = 0; index < target.length; index += 1) {
             const key = target.key(index)
-            if (key) storage.push(`${key}=${target.getItem(key)}`)
+
+            if (key) {
+              storage.push(`${key}=${target.getItem(key)}`)
+            }
           }
         }
 
@@ -323,6 +352,7 @@ test.describe('packaged Korgo SSH-only runtime', () => {
           storage
         }
       })
+
       const exposed = JSON.stringify({ consoleMessages, renderer })
       const observations = readFakeSshObservations(fixture.sandbox)
 
@@ -330,7 +360,9 @@ test.describe('packaged Korgo SSH-only runtime', () => {
       expect(renderer.bridgeKeys).not.toContain('getGatewayWsUrl')
       expect(exposed).not.toContain(SENTINEL)
       expect(exposed).not.toMatch(/[?&](?:token|ticket)=/i)
-      expect(observations.some(item => item.operation === 'token-upload' || item.operation === 'remote-start')).toBe(false)
+      expect(observations.some(item => item.operation === 'token-upload' || item.operation === 'remote-start')).toBe(
+        false
+      )
       expectStrictSsh(observations)
 
       writeSshOnlyEvidence('renderer-credential-absence', {

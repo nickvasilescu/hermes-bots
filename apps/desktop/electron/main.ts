@@ -15,7 +15,6 @@ import {
   dialog,
   net as electronNet,
   globalShortcut,
-  ipcMain,
   Menu,
   nativeImage,
   nativeTheme,
@@ -23,6 +22,7 @@ import {
   powerMonitor,
   powerSaveBlocker,
   protocol,
+  ipcMain as rawIpcMain,
   safeStorage,
   screen,
   session,
@@ -111,6 +111,7 @@ import { findGitBash as _findGitBash } from './find-git-bash'
 import { installFoundInPageForwarder, performFind, stopFind } from './find-in-page'
 import { createFirstRunSetupGate } from './first-run-setup-gate'
 import { readDirForIpc } from './fs-read-dir'
+import { registerGatewayProxy } from './gateway-proxy'
 import { probeGatewayWebSocket } from './gateway-ws-probe'
 import { scanGitRepos } from './git-repo-scan'
 import {
@@ -162,8 +163,12 @@ import { cursorPointInWindow } from './hud-cursor'
 import { snapHudBounds } from './hud-snap'
 import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
+import { IPC_CHANNEL_POLICY } from './ipc-channel-policy'
+import { createAuthorizedIpc } from './ipc-policy'
+import { IpcTrustRegistry, type WindowCapability } from './ipc-trust'
 import { registerLinkTitleIntegration } from './link-title-integration'
 import { ensureMainWindow } from './main-window-lifecycle'
+import { mayGrantMediaPermission } from './media-permission-policy'
 import {
   oauthGuardMayHardFail,
   oauthSessionIsLive,
@@ -235,6 +240,7 @@ import {
   revalidateRemoteConnection
 } from './remote-liveness'
 import { attachRendererConsoleCapture, formatRendererBoundaryReport } from './renderer-log'
+import { isTrustedRendererUrl } from './renderer-origin'
 import {
   buildSessionWindowUrl,
   chatWindowWebPreferences,
@@ -244,6 +250,7 @@ import {
   SESSION_WINDOW_MIN_WIDTH
 } from './session-windows'
 import { registerSkuIntegrations } from './sku-integrations'
+import { windowsSandboxIntegration } from './sku-integrations.windows-sandbox'
 import { ensureSpawnHelperExecutable } from './spawn-helper-perms'
 import { createBootstrapCoordinator, sshConfigFingerprint } from './ssh-bootstrap-coordinator'
 import { collectSshConfigHosts, parseSshGOutput } from './ssh-config'
@@ -273,6 +280,7 @@ import {
 import { formatBlockerMessage, formatProbeFailedMessage, scanVenvBlockers } from './venv-blocker-scan'
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
 import { createWakeIndicatorWindowController } from './wake-indicator-window'
+import { decideWebviewAttachment } from './webview-policy'
 import { readWindowBelow } from './window-below'
 import { installWindowRendererLifecycle } from './window-renderer-lifecycle'
 import { createWindowRevealController } from './window-reveal'
@@ -297,7 +305,6 @@ import {
   detectRemotePlatform,
   helper
 } from './windows-remote-lifecycle'
-import { windowsSandboxIntegration } from './sku-integrations.windows-sandbox'
 import { installWindowsSystemCaTrust } from './windows-system-ca'
 import { readWindowsUserEnvVar } from './windows-user-env'
 import { isPackagedInstallPath as isPackagedInstallPathUnderRoots } from './workspace-cwd'
@@ -323,6 +330,30 @@ const IS_WSL = isWslEnvironment()
 // build SDK, so gate Tahoe workarounds on Darwin instead.
 const DARWIN_MAJOR = IS_MAC ? Number.parseInt(os.release(), 10) || 0 : 0
 const APP_ROOT = app.getAppPath()
+
+const ipcTrustRegistry = new IpcTrustRegistry()
+
+const trustedRendererUrl = (url: string) =>
+  isTrustedRendererUrl(url, {
+    devServerUrl: DEV_SERVER,
+    isPackaged: IS_PACKAGED,
+    rendererEntryPath: resolveRendererIndex()
+  })
+
+const ipcMain = createAuthorizedIpc({
+  ipcMain: rawIpcMain,
+  isTrustedRendererUrl: trustedRendererUrl,
+  onDenied: ({ channel, senderId }) => {
+    console.warn(`[ipc] denied renderer request channel=${channel} sender=${senderId ?? 'unknown'}`)
+  },
+  policy: IPC_CHANNEL_POLICY,
+  registry: ipcTrustRegistry
+})
+
+const gatewayProxy = registerGatewayProxy({
+  ipc: ipcMain,
+  resolveUrl: profile => freshGatewayWsUrl(profile)
+})
 
 // Preload must be plain JS — Electron's sandbox can't run .ts, and tsx's
 // ESM loader is broken on Electron 40's Node (ERR_INVALID_RETURN_PROPERTY_VALUE).
@@ -354,22 +385,24 @@ if (REMOTE_DISPLAY_REASON) {
 // the CDP tooling in scripts/ can attach; never for a packaged build — see
 // electron/dev-cdp.ts. Must run before app `ready` like the switches above;
 // Chromium binds it at launch.
-const DEV_CDP = resolveDevCdpPort({ env: process.env, isPackaged: IS_PACKAGED, devServer: DEV_SERVER })
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  const devCdp = resolveDevCdpPort({ env: process.env, isPackaged: IS_PACKAGED, devServer: DEV_SERVER })
 
-if (DEV_CDP.port) {
-  app.commandLine.appendSwitch('remote-debugging-port', String(DEV_CDP.port))
-  // Loopback only. Chromium already defaults to 127.0.0.1, but say it out loud
-  // so a future edit can't widen it by omission.
-  app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
-  console.log(
-    `[hermes] renderer debugging on http://127.0.0.1:${DEV_CDP.port} — anything that can reach it ` +
-      'can run code in the renderer. HERMES_DESKTOP_CDP_PORT=off to disable.'
-  )
-} else {
-  const why = describeDevCdpDecision(DEV_CDP)
+  if (devCdp.port) {
+    app.commandLine.appendSwitch('remote-debugging-port', String(devCdp.port))
+    // Loopback only. Chromium already defaults to 127.0.0.1, but say it out loud
+    // so a future edit can't widen it by omission.
+    app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
+    console.log(
+      `[hermes] renderer debugging on http://127.0.0.1:${devCdp.port} — anything that can reach it ` +
+        'can run code in the renderer. HERMES_DESKTOP_CDP_PORT=off to disable.'
+    )
+  } else {
+    const why = describeDevCdpDecision(devCdp)
 
-  if (why) {
-    console.warn(`[hermes] ${why}`)
+    if (why) {
+      console.warn(`[hermes] ${why}`)
+    }
   }
 }
 
@@ -444,7 +477,9 @@ const SOURCE_REPO_ROOT = path.resolve(APP_ROOT, '../..')
 const INSTALL_STAMP_SCHEMA_VERSION = 1
 
 function loadInstallStamp() {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return null
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    return null
+  }
 
   // Try packaged location first (resources/install-stamp.json), then the
   // dev/local build output (apps/desktop/build/install-stamp.json) so
@@ -587,8 +622,10 @@ const BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, '.hermes-bootstr
 const BOOTSTRAP_MARKER_SCHEMA_VERSION = 1
 
 const DESKTOP_CONNECTION_CONFIG_PATH = path.join(app.getPath('userData'), 'connection.json')
+
 const DESKTOP_ORGO_CONFIG_PATH =
   process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? '' : path.join(app.getPath('userData'), 'orgo-desktop.json')
+
 const DESKTOP_INSTALLATION_PATH = path.join(app.getPath('userData'), 'desktop-installation.json')
 const DESKTOP_UPDATE_CONFIG_PATH = path.join(app.getPath('userData'), 'updates.json')
 const DESKTOP_WINDOW_STATE_PATH = path.join(app.getPath('userData'), 'window-state.json')
@@ -1504,7 +1541,9 @@ let bootstrapState = {
 let firstRunSetupGate = null
 
 function broadcastBootstrapEvent(ev) {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    return
+  }
 
   if (ev.type === 'manifest') {
     bootstrapState.manifest = ev
@@ -4317,6 +4356,7 @@ function filenameFromUrl(rawUrl, fallback = 'image') {
 }
 
 let oauthSession = null
+
 async function resourceBufferFromUrl(rawUrl) {
   if (!rawUrl) {
     throw new Error('Missing URL')
@@ -5322,55 +5362,43 @@ function installContextMenu(window) {
   })
 }
 
-// Microphone and camera capture. The voice composer drives mic access and
-// renderer features (e.g. desktop plugins) can drive camera access, both
-// through getUserMedia, which Chromium gates behind these two session hooks.
-//
-// The naive `details.mediaTypes.includes('audio')` check works on macOS but
-// breaks on Windows: Chromium frequently fires the request with an empty or
-// undefined `mediaTypes`, so a strict check denies it and getUserMedia throws
-// NotAllowedError. We therefore allow the capture permissions and treat absent
-// metadata as allowed.
-//
-// Granting here is not the last gate: the OS still applies its own capture
-// permission (macOS TCC prompts on first use, per the NSMicrophone/NSCamera
-// usage strings), so the user keeps a real allow/deny and can revoke it in
-// System Settings afterwards.
-function isMediaCapturePermission(permission, details) {
-  if (permission === 'audioCapture' || permission === 'videoCapture') {
-    return true
-  }
-
-  if (permission !== 'media') {
-    return false
-  }
-
-  const mediaTypes = details?.mediaTypes
-
-  // Windows: mediaTypes is often empty for a capture request. Don't deny on
-  // missing metadata.
-  if (!Array.isArray(mediaTypes) || mediaTypes.length === 0) {
-    return true
-  }
-
-  return mediaTypes.includes('audio') || mediaTypes.includes('video')
-}
-
 function installMediaPermissions() {
-  // Async request handler: the prompt-style path (most platforms).
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-    callback(isMediaCapturePermission(permission, details))
+  const policy = { isTrustedRendererUrl: trustedRendererUrl }
+
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    callback(
+      mayGrantMediaPermission(
+        {
+          isRegisteredApplicationContents: ipcTrustRegistry.isRegistered(webContents),
+          isTopLevelFrame:
+            details.isMainFrame === true &&
+            details.requestingUrl === (webContents.mainFrame?.url ?? webContents.getURL()),
+          mediaTypes: 'mediaTypes' in details ? details.mediaTypes : undefined,
+          permission,
+          requestingUrl: details.requestingUrl
+        },
+        policy
+      )
+    )
   })
 
-  // Synchronous check handler: Chromium consults this for getUserMedia on
-  // Windows in addition to (or instead of) the request handler. Without it,
-  // the check defaults to false and capture is denied before the request
-  // handler ever runs.
-  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
-    return (
-      permission === 'media' ||
-      permission === ('audioCapture' as any) /* todo: is this needed? */ ||
-      permission === ('videoCapture' as any)
+  session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+    if (!webContents) {
+      return false
+    }
+
+    const requestingUrl = details.requestingUrl || requestingOrigin
+
+    return mayGrantMediaPermission(
+      {
+        isRegisteredApplicationContents: ipcTrustRegistry.isRegistered(webContents),
+        isTopLevelFrame:
+          details.isMainFrame === true && requestingUrl === (webContents.mainFrame?.url ?? webContents.getURL()),
+        mediaTypes: details.mediaType && details.mediaType !== 'unknown' ? [details.mediaType] : ['audio'],
+        permission,
+        requestingUrl
+      },
+      policy
     )
   })
 }
@@ -5407,7 +5435,9 @@ function installMediaPermissions() {
 const OAUTH_SESSION_PARTITION = process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? '' : 'persist:hermes-remote-oauth'
 
 function getOauthSession() {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return null
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    return null
+  }
 
   if (oauthSession || !app.isReady()) {
     return oauthSession
@@ -5858,7 +5888,9 @@ function fetchJsonViaOauthSession(url, options: any = {}) {
 const _nativeTokens = new Map<string, NativeTokenSet>()
 
 function _nativeTokenStorePath() {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return ''
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    return ''
+  }
 
   // Co-located with the connection config under userData; one JSON file mapping
   // baseUrl → { encoding, value } safeStorage payloads.
@@ -5983,13 +6015,17 @@ function _nativeTokenStoreIo(): NativeTokenStoreIo {
 }
 
 function _persistNativeTokens(baseUrl: string, tokens: NativeTokenSet | null) {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    return
+  }
 
   persistNativeTokenSet(baseUrl, tokens, _nativeTokenStoreIo())
 }
 
 function _loadNativeTokens(baseUrl: string): NativeTokenSet | null {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return null
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    return null
+  }
 
   const cached = _nativeTokens.get(baseUrl)
 
@@ -6038,7 +6074,9 @@ function postJsonNoAuth(url: string, body: unknown, opts: any = {}) {
 // /auth/native/refresh if the stored one is at/near expiry. Returns null when
 // there are no tokens or the refresh is terminally rejected (caller re-logins).
 async function ensureNativeAccessToken(baseUrl: string): Promise<string | null> {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return null
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    return null
+  }
 
   const tokens = _loadNativeTokens(baseUrl)
 
@@ -8949,6 +8987,85 @@ async function startHermes() {
 // sprite in unzoomed CSS px (overlayWindowSize -> setBounds) and has its own
 // Alt+wheel scale, so inheriting the global UI zoom would render the mascot
 // larger than its window and crop it. Chat windows keep zoom on.
+function registerApplicationWindow(win: BrowserWindow, capability: WindowCapability) {
+  const { webContents } = win
+  let unregisterTrust = ipcTrustRegistry.register(webContents, capability)
+
+  const revokeTrust = () => {
+    unregisterTrust()
+
+    unregisterTrust = () => {}
+    gatewayProxy.disposeOwner(webContents)
+  }
+
+  const rotateTrust = (url: string) => {
+    revokeTrust()
+
+    if (trustedRendererUrl(url) && !webContents.isDestroyed()) {
+      unregisterTrust = ipcTrustRegistry.register(webContents, capability)
+    }
+  }
+
+  webContents.on('did-start-navigation', details => {
+    if (details.isMainFrame && !details.isSameDocument) {
+      rotateTrust(details.url)
+    }
+  })
+  webContents.once('destroyed', revokeTrust)
+
+  webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    // Electron's documented will-attach-webview event does not expose the
+    // embedding frame. Some releases carry senderFrame at runtime; when they
+    // do, require the exact registered main frame. Otherwise an empty child
+    // frame tree is the only affirmative proof available that a subframe could
+    // not have initiated the attachment. Existing subframes therefore make
+    // attachment fail closed rather than receiving an implicit grant.
+    const senderFrame = (event as Electron.Event & { senderFrame?: Electron.WebFrameMain | null }).senderFrame
+
+    const parentIsTopLevel =
+      senderFrame !== undefined ? senderFrame === webContents.mainFrame : webContents.mainFrame.frames.length === 0
+
+    const decision = decideWebviewAttachment(
+      {
+        parentIsTopLevel,
+        parentUrl: webContents.getURL(),
+        src: params.src,
+        webPreferences: webPreferences as unknown as Record<string, unknown>
+      },
+      { isTrustedParentUrl: trustedRendererUrl }
+    )
+
+    if (!decision.allow) {
+      event.preventDefault()
+
+      return
+    }
+
+    Object.assign(webPreferences, decision.webPreferences)
+  })
+
+  webContents.on('did-attach-webview', (_event, guest) => {
+    guest.setWindowOpenHandler(() => ({ action: 'deny' }))
+    guest.on('will-navigate', (event, url) => {
+      const decision = decideWebviewAttachment(
+        {
+          // The guest reached this listener only after the attachment gate
+          // above proved its parent was top-level.
+          parentIsTopLevel: true,
+          parentUrl: webContents.getURL(),
+          src: url,
+          webPreferences: {}
+        },
+        { isTrustedParentUrl: trustedRendererUrl }
+      )
+
+      if (!decision.allow) {
+        event.preventDefault()
+      }
+    })
+  })
+}
+
 function wireCommonWindowHandlers(win, { zoom = true }: { zoom?: boolean } = {}) {
   installPreviewShortcut(win)
   installDevToolsShortcut(win)
@@ -8972,7 +9089,7 @@ function wireCommonWindowHandlers(win, { zoom = true }: { zoom?: boolean } = {})
     return { action: 'deny' }
   })
   win.webContents.on('will-navigate', (event, url) => {
-    if ((DEV_SERVER && url.startsWith(DEV_SERVER)) || (!DEV_SERVER && url.startsWith('file:'))) {
+    if (trustedRendererUrl(url)) {
       return
     }
 
@@ -9052,8 +9169,13 @@ function spawnSecondaryWindow({ sessionId, watch }: { sessionId?: string; watch?
     // themes/context.tsx, so the window appears already themed.
     show: false,
     backgroundColor: getWindowBackgroundColor(),
-    webPreferences: chatWindowWebPreferences(PRELOAD_PATH)
+    webPreferences: {
+      ...chatWindowWebPreferences(PRELOAD_PATH, { devTools: !isSshOnlyProduct() }),
+      webviewTag: !isSshOnlyProduct()
+    }
   })
+
+  registerApplicationWindow(win, 'session')
 
   if (IS_MAC) {
     win.setWindowButtonPosition?.(WINDOW_BUTTON_POSITION)
@@ -9146,8 +9268,13 @@ function createInstanceWindow() {
     icon,
     show: false,
     backgroundColor: getWindowBackgroundColor(),
-    webPreferences: chatWindowWebPreferences(PRELOAD_PATH)
+    webPreferences: {
+      ...chatWindowWebPreferences(PRELOAD_PATH, { devTools: !isSshOnlyProduct() }),
+      webviewTag: !isSshOnlyProduct()
+    }
   })
+
+  registerApplicationWindow(win, 'primary')
 
   instanceWindows.add(win)
 
@@ -9259,12 +9386,14 @@ function spawnPetOverlayWindow(bounds) {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
-      devTools: true,
+      devTools: !isSshOnlyProduct(),
       // Keep the sprite animating + bubble updating while the main window is
       // minimized/blurred — the whole point of the overlay.
       backgroundThrottling: false
     }
   })
+
+  registerApplicationWindow(win, 'pet-overlay')
 
   // Float above other apps and follow the user across desktops so the pet is
   // always reachable. `floating` + `type: panel` is the macOS NSPanel path; the
@@ -9623,8 +9752,13 @@ function spawnHudWindow(sessionId, profile) {
     // The full chat webPreferences — this window streams a real transcript, so
     // it needs everything a chat window needs (preload bridge, autoplay for
     // voice, the shared throttling contract).
-    webPreferences: chatWindowWebPreferences(PRELOAD_PATH)
+    webPreferences: {
+      ...chatWindowWebPreferences(PRELOAD_PATH, { devTools: !isSshOnlyProduct() }),
+      webviewTag: !isSshOnlyProduct()
+    }
   })
+
+  registerApplicationWindow(win, 'hud')
 
   win.setAlwaysOnTop(true, IS_MAC ? 'floating' : 'screen-saver')
   win.setHiddenInMissionControl?.(true)
@@ -9840,9 +9974,11 @@ function spawnQuickEntryWindow() {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
-      devTools: true
+      devTools: !isSshOnlyProduct()
     }
   })
+
+  registerApplicationWindow(win, 'quick-entry')
 
   win.setAlwaysOnTop(true, IS_MAC ? 'floating' : 'screen-saver')
   win.setHiddenInMissionControl?.(true)
@@ -10009,8 +10145,13 @@ function createWindow() {
     // live answer keeps painting while the window is blurred or minimized,
     // without pinning visibilityState to 'visible' at idle. See
     // session-windows.ts and stream-throttle.ts.
-    webPreferences: chatWindowWebPreferences(PRELOAD_PATH)
+    webPreferences: {
+      ...chatWindowWebPreferences(PRELOAD_PATH, { devTools: !isSshOnlyProduct() }),
+      webviewTag: !isSshOnlyProduct()
+    }
   })
+
+  registerApplicationWindow(mainWindow, 'primary')
 
   const createdMainWindow = mainWindow
 
@@ -10136,7 +10277,23 @@ function createWindow() {
   })
 }
 
-ipcMain.handle('hermes:connection', async (_event, profile) => ensureBackend(profile))
+function rendererConnectionDescriptor(connection: any) {
+  if (!isSshOnlyProduct()) {
+    return connection
+  }
+
+  const { token: _token, wsUrl: _wsUrl, ...safeConnection } = connection || {}
+
+  return {
+    ...safeConnection,
+    requireFreshWsUrl: true,
+    useGatewayProxy: true
+  }
+}
+
+ipcMain.handle('hermes:connection', async (_event, profile) =>
+  rendererConnectionDescriptor(await ensureBackend(profile))
+)
 // Reconnect-after-wake recovery. A REMOTE primary backend has no child process,
 // so the 'exit'/'error' handlers that would clear a dead connection promise never
 // fire — once the remote becomes unreachable across a sleep/wake the renderer
@@ -10205,9 +10362,13 @@ ipcMain.handle('hermes:backend:touch', async (_event, profile) => {
 
   return { ok: true }
 })
-ipcMain.handle('hermes:gateway:ws-url', async (_event, profile) => {
-  return gatewayWsUrlIpcResult(() => freshGatewayWsUrl(profile))
-})
+
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  ipcMain.handle('hermes:gateway:ws-url', async (_event, profile) => {
+    return gatewayWsUrlIpcResult(() => freshGatewayWsUrl(profile))
+  })
+}
+
 ipcMain.handle('hermes:window:openSession', async (_event, sessionId, opts) => {
   if (typeof sessionId !== 'string' || !sessionId.trim()) {
     return { ok: false, error: 'invalid-session-id' }
@@ -10474,6 +10635,7 @@ ipcMain.handle('hermes:hud:close', async () => {
 
   return { ok: true }
 })
+
 if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:bootstrap:reset', async () => {
@@ -10566,7 +10728,9 @@ if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
     })
   })
 }
+
 ipcMain.handle('hermes:boot-progress:get', async () => bootProgressState)
+
 if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:bootstrap:get', async () => getBootstrapState())
@@ -10647,6 +10811,7 @@ if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
     )
   })
 }
+
 ipcMain.handle('hermes:connection-config:get', async (_event, profile) =>
   sanitizeDesktopConnectionConfig(readDesktopConnectionConfig(), profile)
 )
@@ -10695,6 +10860,7 @@ ipcMain.handle('hermes:ssh-config:resolve', async (_event, host) => {
   })
 })
 ipcMain.handle('hermes:connection-config:test', async (_event, payload) => testDesktopConnectionConfig(payload))
+
 if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:connection-config:probe', async (_event, rawUrl) => probeRemoteAuthMode(rawUrl))
@@ -10807,6 +10973,7 @@ if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
     })
   })
 }
+
 ipcMain.handle('hermes:connection-config:save', async (_event, payload) => {
   const scope = connectionScopeKey(payload?.profile) || ''
   const previous = readDesktopConnectionConfig()
@@ -12754,6 +12921,11 @@ ipcMain.handle('hermes:deep-link-ready', () => {
 
   return { ok: true }
 })
+
+// Registration is an exact contract: every policy entry must have one handler,
+// and every renderer-originated handler above must have been classified before
+// any application window can execute preload code.
+ipcMain.assertComplete()
 
 function registerDeepLinkProtocol() {
   try {

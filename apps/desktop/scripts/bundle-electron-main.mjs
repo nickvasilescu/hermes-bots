@@ -53,6 +53,10 @@ const windowsSandboxIntegration = resolve(
     ? 'electron/sku-integrations.windows-sandbox.disabled.ts'
     : 'electron/sku-integrations.windows-sandbox.full.ts'
 )
+const ipcChannelPolicy = resolve(
+  root,
+  sku === 'bot-ssh-only' ? 'electron/ipc-channel-policy.ssh-only.ts' : 'electron/ipc-channel-policy.ts'
+)
 const bootstrapIntegration = resolve(root, 'electron/sku-integrations.bootstrap.disabled.ts')
 const orgoBrokerIntegration = resolve(root, 'electron/sku-integrations.orgo-broker.disabled.ts')
 const orgoDesktopIntegration = resolve(root, 'electron/sku-integrations.orgo-desktop.disabled.ts')
@@ -66,6 +70,7 @@ const skuIntegrationAliases = {
   './sku-integrations.preload': preloadSkuIntegration,
   './sku-integrations': mainSkuIntegration,
   './sku-integrations.windows-sandbox': windowsSandboxIntegration,
+  './ipc-channel-policy': ipcChannelPolicy,
   ...(sku === 'bot-ssh-only'
     ? {
         './bootstrap-runner': bootstrapIntegration,
@@ -92,6 +97,9 @@ const skuIntegrationPlugin = {
       path: skuIntegrationAliases[args.path]
     }))
     build.onResolve({ filter: /^\.\/sku-integrations\.windows-sandbox$/ }, args => ({
+      path: skuIntegrationAliases[args.path]
+    }))
+    build.onResolve({ filter: /^\.\/ipc-channel-policy$/ }, args => ({
       path: skuIntegrationAliases[args.path]
     }))
     if (sku === 'bot-ssh-only') {

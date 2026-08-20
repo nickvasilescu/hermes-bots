@@ -3,7 +3,13 @@ import assert from 'node:assert/strict'
 import { test } from 'vitest'
 
 import { GATEWAY_PROXY_CHANNELS, registerGatewayProxy } from './gateway-proxy'
-import { IPC_CHANNEL_POLICY, PRIMARY_ONLY_IPC_PRIVILEGES, RENDERER_ORIGINATED_IPC_CHANNELS } from './ipc-channel-policy'
+import {
+  IPC_CHANNEL_POLICY,
+  ipcChannelPolicyForSku,
+  PRIMARY_ONLY_IPC_PRIVILEGES,
+  RENDERER_ORIGINATED_IPC_CHANNELS,
+  SSH_ONLY_OMITTED_IPC_CHANNELS
+} from './ipc-channel-policy'
 import { createAuthorizedIpc, type IpcChannelPrivilege, type IpcChannelRule } from './ipc-policy'
 import { IpcTrustRegistry, type WindowCapability } from './ipc-trust'
 
@@ -30,6 +36,23 @@ test('inventory classifies every exact renderer entry point without wildcard gra
     rules.every(item => item.capabilities.length > 0),
     true
   )
+})
+
+test('SSH-only policy exactly removes compile-time omitted handlers while retaining the proxy', () => {
+  const sshOnlyPolicy = ipcChannelPolicyForSku('bot-ssh-only')
+  const fullPolicy = ipcChannelPolicyForSku('bot')
+
+  assert.equal(fullPolicy, IPC_CHANNEL_POLICY)
+  assert.equal(Object.keys(sshOnlyPolicy).length, 119)
+  assert.equal(SSH_ONLY_OMITTED_IPC_CHANNELS.length, 48)
+
+  for (const channel of SSH_ONLY_OMITTED_IPC_CHANNELS) {
+    assert.equal(sshOnlyPolicy[channel], undefined, channel)
+  }
+
+  assert.ok(sshOnlyPolicy[GATEWAY_PROXY_CHANNELS.start])
+  assert.ok(sshOnlyPolicy[GATEWAY_PROXY_CHANNELS.send])
+  assert.ok(sshOnlyPolicy[GATEWAY_PROXY_CHANNELS.close])
 })
 
 test('secondary windows have no host-impact capability grants', () => {

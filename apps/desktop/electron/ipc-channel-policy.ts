@@ -431,3 +431,69 @@ function buildPolicy(groups: readonly PolicyGroup[]): IpcChannelPolicy {
 export const IPC_CHANNEL_POLICY = buildPolicy(GROUPS)
 
 export const RENDERER_ORIGINATED_IPC_CHANNELS = Object.freeze(Object.keys(IPC_CHANNEL_POLICY).sort())
+
+// The SSH-only artifact does not merely hide these APIs in the renderer. Its
+// main/preload bundles omit their implementations, so its registration policy
+// must describe that smaller executable surface exactly. Keeping this as an
+// explicit denylist makes additions fail the completeness gate until they are
+// deliberately classified for the constrained SKU.
+export const SSH_ONLY_OMITTED_IPC_CHANNELS = Object.freeze([
+  'hermes:gateway:ws-url',
+  'hermes:get-remote-display-reason',
+  'hermes:bootstrap:get',
+  'hermes:bootstrap:reset',
+  'hermes:bootstrap:repair',
+  'hermes:bootstrap:continue-local',
+  'hermes:bootstrap:cancel',
+  'hermes:orgo-desktop:config:get',
+  'hermes:orgo-desktop:config:save',
+  'hermes:orgo-desktop:session',
+  'hermes:orgo-desktop:key:save',
+  'hermes:orgo-desktop:status',
+  'hermes:orgo-desktop:provision',
+  'hermes:orgo-desktop:tailscale:local-status',
+  'hermes:orgo-desktop:tailscale:local-open',
+  'hermes:orgo-desktop:tailscale:begin',
+  'hermes:orgo-desktop:tailscale:status',
+  'hermes:orgo-desktop:tailscale:connect',
+  'hermes:orgo-desktop:ensure-running',
+  'hermes:orgo-desktop:doctor',
+  'hermes:orgo-desktop:sync',
+  'hermes:orgo-desktop:workspaces',
+  'hermes:orgo-desktop:computers',
+  'hermes:connectors:key:status',
+  'hermes:connectors:key:save',
+  'hermes:connectors:key:remove',
+  'hermes:connectors:catalog',
+  'hermes:connectors:categories',
+  'hermes:connectors:connections',
+  'hermes:connectors:authorize',
+  'hermes:connectors:poll',
+  'hermes:connectors:disconnect',
+  'hermes:connectors:sync',
+  'hermes:connection-config:probe',
+  'hermes:connection-config:oauth-login',
+  'hermes:connection-config:oauth-logout',
+  'hermes:cloud:status',
+  'hermes:cloud:login',
+  'hermes:cloud:logout',
+  'hermes:cloud:discover',
+  'hermes:cloud:agent-sign-in',
+  'hermes:fetchLinkTitle',
+  'hermes:updates:check',
+  'hermes:updates:apply',
+  'hermes:updates:branch:get',
+  'hermes:updates:branch:set',
+  'hermes:uninstall:summary',
+  'hermes:uninstall:run'
+] as const)
+
+const SSH_ONLY_OMITTED_IPC_SET = new Set<string>(SSH_ONLY_OMITTED_IPC_CHANNELS)
+
+const SSH_ONLY_IPC_CHANNEL_POLICY = Object.freeze(
+  Object.fromEntries(Object.entries(IPC_CHANNEL_POLICY).filter(([channel]) => !SSH_ONLY_OMITTED_IPC_SET.has(channel)))
+) satisfies IpcChannelPolicy
+
+export function ipcChannelPolicyForSku(sku: string | undefined): IpcChannelPolicy {
+  return sku === 'bot-ssh-only' ? SSH_ONLY_IPC_CHANNEL_POLICY : IPC_CHANNEL_POLICY
+}

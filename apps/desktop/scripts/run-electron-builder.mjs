@@ -102,7 +102,12 @@ if (isSshOnlyBuild) {
     extraMetadata: {
       ...(baseConfig.extraMetadata || {}),
       productName: 'Korgo Bot',
-      hermesDesktopSku: SSH_ONLY_SKU
+      hermesDesktopSku: SSH_ONLY_SKU,
+      // Renderer/main code is bundled and the two native dependencies are
+      // explicitly staged under dist/node_modules. Retaining the full source
+      // dependency map here leaks forbidden integration package names into the
+      // packaged root package.json even when no corresponding code is shipped.
+      dependencies: null
     },
     // The client SKU must not inherit install-stamp, Orgo, or any other
     // full-product resources from package.json.

@@ -180,7 +180,7 @@ function baseSshOptions(controlPath, connectTimeoutMs?, hostKeyPolicy?: any) {
         '-o',
         'IdentityAgent=none'
       ]
-    : ['-o', 'StrictHostKeyChecking=accept-new']
+    : defaultHostKeyOptions()
 
   return [
     ...mux,
@@ -192,6 +192,14 @@ function baseSshOptions(controlPath, connectTimeoutMs?, hostKeyPolicy?: any) {
     '-o',
     `ConnectTimeout=${connectSecs}`
   ]
+}
+
+function defaultHostKeyOptions(): string[] {
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    throw new Error('SSH-only builds require an explicit, pre-seeded host-key policy.')
+  }
+
+  return ['-o', 'StrictHostKeyChecking=accept-new']
 }
 
 // Non-default port and explicit identity file, shared by exec/master/forward.

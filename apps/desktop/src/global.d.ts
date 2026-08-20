@@ -1,5 +1,6 @@
 import type { GatewayWsUrlResult } from '@hermes/shared'
 
+import type { GatewayProxyBridge } from './lib/native-gateway-socket'
 import type { WakeIndicatorState } from './lib/wake-indicator'
 import type {
   PetOverlayBounds,
@@ -29,6 +30,9 @@ declare global {
       // reaper spares it while its chat is active.
       touchBackend: (profile?: string | null) => Promise<{ ok: boolean }>
       getGatewayWsUrl: (profile?: null | string) => Promise<GatewayWsUrlResult>
+      // Present only in the SSH-only preload. The full product retains the
+      // direct fresh-URL resolver above for compatibility.
+      gatewayProxy?: GatewayProxyBridge
       // Open (or focus) a standalone OS window for a single chat session so
       // the user can work with multiple chats side by side. Returns ok:false
       // with an error code when the sessionId is empty/invalid. `watch` opens
@@ -579,6 +583,8 @@ export interface HermesConnection {
   source?: 'env' | 'local' | 'settings'
   token: string
   wsUrl: string
+  requireFreshWsUrl?: boolean
+  useGatewayProxy?: boolean
   logs: string[]
   // Set for pool (non-primary) backends so the renderer knows which profile a
   // connection belongs to.
@@ -1200,6 +1206,11 @@ export type HermesDesktopBridge = Window['hermesDesktop']
  * The ambient Window declaration remains the full-product authoring contract;
  * runtime SKU selection removes these properties entirely.
  */
+export type SshOnlyHermesConnection = Omit<HermesConnection, 'token' | 'wsUrl'> & {
+  requireFreshWsUrl: true
+  useGatewayProxy: true
+}
+
 export type SshOnlyDesktopBridge = Omit<
   HermesDesktopBridge,
   | 'cancelBootstrap'
@@ -1208,6 +1219,8 @@ export type SshOnlyDesktopBridge = Omit<
   | 'continueBootstrapLocal'
   | 'fetchLinkTitle'
   | 'getBootstrapState'
+  | 'getGatewayWsUrl'
+  | 'getConnection'
   | 'getRemoteDisplayReason'
   | 'oauthLoginConnectionConfig'
   | 'oauthLogoutConnectionConfig'
@@ -1219,4 +1232,7 @@ export type SshOnlyDesktopBridge = Omit<
   | 'resetBootstrap'
   | 'uninstall'
   | 'updates'
->
+> & {
+  getConnection: (profile?: null | string) => Promise<SshOnlyHermesConnection>
+  gatewayProxy: GatewayProxyBridge
+}

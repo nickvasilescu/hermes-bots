@@ -46,6 +46,10 @@ export class IpcTrustRegistry {
     this.#contents.delete(contents)
   }
 
+  isRegistered(contents: WebContentsLike): boolean {
+    return this.#contents.has(contents) && !contents.isDestroyed?.()
+  }
+
   identify(event: IpcEventLike, isTrustedRendererUrl: (url: string) => boolean): IpcSenderIdentity | null {
     const sender = event.sender
     const frame = event.senderFrame

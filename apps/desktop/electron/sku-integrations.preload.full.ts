@@ -2,6 +2,7 @@ import type { IpcRenderer } from 'electron'
 
 export function createSkuPreloadBridge(ipcRenderer: IpcRenderer) {
   return {
+    getGatewayWsUrl: profile => ipcRenderer.invoke('hermes:gateway:ws-url', profile),
     orgoDesktop: {
       getConfig: profile => ipcRenderer.invoke('hermes:orgo-desktop:config:get', profile),
       saveConfig: payload => ipcRenderer.invoke('hermes:orgo-desktop:config:save', payload),
@@ -46,6 +47,7 @@ export function createSkuPreloadBridge(ipcRenderer: IpcRenderer) {
     onOpenUpdatesRequested: callback => {
       const listener = () => callback()
       ipcRenderer.on('hermes:open-updates', listener)
+
       return () => ipcRenderer.removeListener('hermes:open-updates', listener)
     },
     getBootstrapState: () => ipcRenderer.invoke('hermes:bootstrap:get'),
@@ -56,6 +58,7 @@ export function createSkuPreloadBridge(ipcRenderer: IpcRenderer) {
     onBootstrapEvent: callback => {
       const listener = (_event, payload) => callback(payload)
       ipcRenderer.on('hermes:bootstrap:event', listener)
+
       return () => ipcRenderer.removeListener('hermes:bootstrap:event', listener)
     },
     getRemoteDisplayReason: () => ipcRenderer.invoke('hermes:get-remote-display-reason'),
@@ -71,6 +74,7 @@ export function createSkuPreloadBridge(ipcRenderer: IpcRenderer) {
       onProgress: callback => {
         const listener = (_event, payload) => callback(payload)
         ipcRenderer.on('hermes:updates:progress', listener)
+
         return () => ipcRenderer.removeListener('hermes:updates:progress', listener)
       }
     }
