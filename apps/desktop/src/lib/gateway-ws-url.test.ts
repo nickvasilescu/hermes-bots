@@ -96,6 +96,22 @@ describe('resolveGatewayWsUrl', () => {
     it('treats a missing authMode as non-oauth (falls back safely)', async () => {
       await expect(resolveGatewayWsUrl({}, { wsUrl: tokenConn.wsUrl })).resolves.toBe(tokenConn.wsUrl)
     })
+
+    it('never falls back when the connection requires fresh native credentials', async () => {
+      const hardened = { ...tokenConn, requireFreshWsUrl: true }
+      const getGatewayWsUrl = vi.fn().mockRejectedValue(new Error('transient'))
+
+      await expect(resolveGatewayWsUrl({ getGatewayWsUrl }, hardened)).rejects.toThrow('transient')
+      await expect(resolveGatewayWsUrl({}, hardened)).rejects.toThrow(/requires a fresh native/i)
+    })
+
+    it('works without a cached URL when a fresh URL is mandatory', async () => {
+      const getGatewayWsUrl = vi.fn().mockResolvedValue({ ok: true, wsUrl: 'ws://host/api/ws?token=fresh' })
+
+      await expect(
+        resolveGatewayWsUrl({ getGatewayWsUrl }, { authMode: 'token', requireFreshWsUrl: true })
+      ).resolves.toBe('ws://host/api/ws?token=fresh')
+    })
   })
 })
 

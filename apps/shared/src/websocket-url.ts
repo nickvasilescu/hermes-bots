@@ -3,7 +3,10 @@ export type GatewayAuthMode = 'oauth' | 'token' | (string & {})
 export interface GatewayWsConnection {
   authMode?: GatewayAuthMode | null
   profile?: null | string
-  wsUrl: string
+  /** Cached fallback for legacy/full-product connections. Hardened SKUs omit
+   * it and require a just-in-time URL from the native process. */
+  wsUrl?: string
+  requireFreshWsUrl?: boolean
 }
 
 export interface ResolveGatewayWsUrlDeps {
@@ -39,6 +42,7 @@ export function isGatewayReauthRequired(error: unknown): error is GatewayReauthR
 export async function resolveGatewayWsUrl(deps: ResolveGatewayWsUrlDeps, conn: GatewayWsConnection): Promise<string> {
   const mint = deps.getGatewayWsUrl
   const profile = conn.profile ?? null
+  const requireFresh = conn.requireFreshWsUrl === true
 
   if (conn.authMode === 'oauth') {
     if (!mint) {
@@ -79,7 +83,13 @@ export async function resolveGatewayWsUrl(deps: ResolveGatewayWsUrlDeps, conn: G
   }
 
   if (mint) {
-    const fresh = await mint(profile).catch(() => null)
+    const fresh = await mint(profile).catch(error => {
+      if (requireFresh) {
+        throw error
+      }
+
+      return null
+    })
 
     if (typeof fresh === 'string') {
       return fresh
@@ -88,6 +98,14 @@ export async function resolveGatewayWsUrl(deps: ResolveGatewayWsUrlDeps, conn: G
     if (fresh?.ok) {
       return fresh.wsUrl
     }
+
+    if (requireFresh && fresh && !fresh.ok) {
+      throw new Error(fresh.error || 'Could not mint a fresh gateway WebSocket URL.')
+    }
+  }
+
+  if (requireFresh || !conn.wsUrl) {
+    throw new Error('This Desktop build requires a fresh native gateway WebSocket URL.')
   }
 
   return conn.wsUrl

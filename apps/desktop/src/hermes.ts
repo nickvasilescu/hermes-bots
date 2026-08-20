@@ -1,4 +1,4 @@
-import { JsonRpcGatewayClient } from '@hermes/shared'
+import { JsonRpcGatewayClient, resolveGatewayWsUrl } from '@hermes/shared'
 
 import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
 import type {
@@ -327,17 +327,24 @@ export function pluginSocket(pluginId: string, path: string, onMessage: (data: u
   const connect = async () => {
     const connection = await window.hermesDesktop.getConnection().catch(() => null)
 
-    // No bridge / OAuth cookie auth (WS tickets are single-use, core-managed):
-    // stay on the polling fallback rather than half-working.
-    if (disposed || !connection || connection.authMode === 'oauth') {
+    if (disposed || !connection) {
       return
     }
 
-    const base = connection.baseUrl.replace(/^http/, 'ws')
-    const join = suffix.includes('?') ? '&' : '?'
-    socket = new WebSocket(
-      `${base}/api/plugins/${pluginId}${suffix}${join}token=${encodeURIComponent(connection.token)}`
+    const gatewayUrl = new URL(await resolveGatewayWsUrl(window.hermesDesktop, connection))
+
+    if (!gatewayUrl.pathname.endsWith('/api/ws')) {
+      return
+    }
+
+    const suffixUrl = new URL(suffix, 'http://plugin.invalid')
+    gatewayUrl.pathname = gatewayUrl.pathname.replace(
+      /\/api\/ws$/,
+      `/api/plugins/${encodeURIComponent(pluginId)}${suffixUrl.pathname}`
     )
+    suffixUrl.searchParams.forEach((value, name) => gatewayUrl.searchParams.set(name, value))
+    gatewayUrl.hash = ''
+    socket = new WebSocket(gatewayUrl.toString())
 
     socket.onmessage = event => {
       attempt = 0

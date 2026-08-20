@@ -20,6 +20,7 @@ import {
   listMcpServers,
   listSessions,
   listSidebarSessions,
+  pluginSocket,
   removeMcpServer,
   resetSidebarBatchCapability,
   saveMcpServers,
@@ -493,5 +494,59 @@ describe('Hermes REST helpers', () => {
         profile: 'inbox'
       })
     )
+  })
+})
+
+describe('pluginSocket credential handling', () => {
+  class FakeSocket {
+    static readonly urls: string[] = []
+    static readonly OPEN = 1
+    static readonly CONNECTING = 0
+    readonly readyState = FakeSocket.OPEN
+    onclose: (() => void) | null = null
+    onmessage: ((event: { data: unknown }) => void) | null = null
+
+    constructor(url: string) {
+      FakeSocket.urls.push(url)
+    }
+
+    close() {}
+  }
+
+  beforeEach(() => {
+    FakeSocket.urls.length = 0
+    vi.stubGlobal('WebSocket', FakeSocket)
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: {
+        getConnection: vi.fn().mockResolvedValue({
+          authMode: 'token',
+          baseUrl: 'http://127.0.0.1:9119',
+          profile: null,
+          requireFreshWsUrl: true
+        }),
+        getGatewayWsUrl: vi.fn().mockResolvedValue({
+          ok: true,
+          wsUrl: 'ws://127.0.0.1:9119/api/ws?token=fresh-sentinel'
+        })
+      }
+    })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    Reflect.deleteProperty(window, 'hermesDesktop')
+  })
+
+  it('mints a fresh URL and carries its auth only into the plugin socket constructor', async () => {
+    const dispose = pluginSocket('kanban', '/events?board=one', () => undefined)
+
+    await vi.waitFor(() => expect(FakeSocket.urls).toHaveLength(1))
+    expect(FakeSocket.urls[0]).toBe(
+      'ws://127.0.0.1:9119/api/plugins/kanban/events?token=fresh-sentinel&board=one'
+    )
+    expect(window.hermesDesktop?.getConnection).toHaveBeenCalledOnce()
+    expect(window.hermesDesktop?.getGatewayWsUrl).toHaveBeenCalledOnce()
+    dispose()
   })
 })
