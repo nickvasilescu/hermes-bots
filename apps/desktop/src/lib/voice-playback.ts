@@ -1,6 +1,5 @@
-import { resolveGatewayWsUrl } from '@hermes/shared'
-
 import { getApiRequestProfile, speakText } from '@/hermes'
+import { openAuxiliaryGatewaySocket } from '@/lib/native-gateway-socket'
 import {
   $voicePlayback,
   setVoicePlaybackState,
@@ -96,7 +95,7 @@ export function stopVoicePlayback() {
 // instead of after full synthesis + base64 transfer.
 // ---------------------------------------------------------------------------
 
-async function resolveSpeakStreamUrl(): Promise<null | string> {
+async function openSpeakStreamSocket(): Promise<null | WebSocket> {
   const desktop = window.hermesDesktop
 
   if (!desktop?.getConnection) {
@@ -104,26 +103,14 @@ async function resolveSpeakStreamUrl(): Promise<null | string> {
   }
 
   try {
-    // Mint a fresh credential (single-use ticket in OAuth mode) for the
-    // ACTIVE profile's backend, then swap the gateway endpoint for the PCM
-    // one — auth is shared across WS routes.
     const profile = getApiRequestProfile()
-    const wsUrl = await resolveGatewayWsUrl(desktop, await desktop.getConnection(profile))
-    const url = new URL(wsUrl)
+    const connection = await desktop.getConnection(profile)
 
-    if (!url.pathname.endsWith('/api/ws')) {
-      return null
-    }
-
-    url.pathname = url.pathname.replace(/\/api\/ws$/, '/api/audio/speak-stream')
-
-    // The backend resolves the TTS provider chain from this profile's
-    // config/.env (same seam as /api/pty?profile=).
-    if (profile) {
-      url.searchParams.set('profile', profile)
-    }
-
-    return url.toString()
+    return openAuxiliaryGatewaySocket(desktop, connection, {
+      path: '/api/audio/speak-stream',
+      profile,
+      purpose: 'voice'
+    })
   } catch {
     return null
   }
@@ -148,8 +135,7 @@ export interface SpeechStreamSession {
  * streams PCM back while generation continues, so speech overlaps the text
  * stream (ChatGPT-style) with no per-sentence connection or synthesis gaps.
  */
-function openSpeechStream(wsUrl: string, options: VoicePlaybackOptions): SpeechStreamSession {
-  const ws = new WebSocket(wsUrl)
+function openSpeechStream(ws: WebSocket, options: VoicePlaybackOptions): SpeechStreamSession {
   ws.binaryType = 'arraybuffer'
 
   let context: AudioContext | null = null
@@ -322,16 +308,16 @@ function openSpeechStream(wsUrl: string, options: VoicePlaybackOptions): SpeechS
  * whole-text `playSpeechText`.
  */
 export async function startSpeechStream(options: VoicePlaybackOptions): Promise<null | SpeechStreamSession> {
-  const wsUrl = await resolveSpeakStreamUrl()
+  const socket = await openSpeakStreamSocket()
 
-  if (!wsUrl) {
+  if (!socket) {
     return null
   }
 
   stopVoicePlayback()
   setVoicePlaybackState(currentState('preparing', options))
 
-  const session = openSpeechStream(wsUrl, options)
+  const session = openSpeechStream(socket, options)
 
   void session.done.then(outcome => {
     if (outcome === 'done') {
@@ -343,8 +329,8 @@ export async function startSpeechStream(options: VoicePlaybackOptions): Promise<
 }
 
 /** One-shot playback of complete text over the streaming WS. */
-function playSpeechStream(wsUrl: string, text: string, options: VoicePlaybackOptions): Promise<'fallback' | 'played'> {
-  const session = openSpeechStream(wsUrl, options)
+function playSpeechStream(socket: WebSocket, text: string, options: VoicePlaybackOptions): Promise<'fallback' | 'played'> {
+  const session = openSpeechStream(socket, options)
   session.append(text)
   session.finish()
 
@@ -452,10 +438,10 @@ export async function playSpeechText(text: string, options: VoicePlaybackOptions
   try {
     // Streaming first; the POST data-URL path is the fallback for backends
     // without the WS endpoint or providers without a chunked API.
-    const streamUrl = await resolveSpeakStreamUrl()
+    const streamSocket = await openSpeakStreamSocket()
 
-    if (streamUrl && isCurrent()) {
-      const outcome = await playSpeechStream(streamUrl, speakableText, options)
+    if (streamSocket && isCurrent()) {
+      const outcome = await playSpeechStream(streamSocket, speakableText, options)
 
       if (outcome === 'played') {
         if (!isCurrent()) {
