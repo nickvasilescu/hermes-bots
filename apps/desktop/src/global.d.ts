@@ -1230,6 +1230,7 @@ export type SshOnlyDesktopBridge = Omit<
   | 'probeConnectionConfig'
   | 'repairBootstrap'
   | 'resetBootstrap'
+  | 'themes'
   | 'uninstall'
   | 'updates'
 > & {

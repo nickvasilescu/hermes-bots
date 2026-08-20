@@ -91,8 +91,6 @@ export const IPC_CHANNEL_POLICY = Object.freeze({
   'hermes:window:readBelow': rule(['primary'], 'handle', 'permission'),
   'hermes:readClipboard': rule(['primary'], 'handle', 'clipboard'),
   'hermes:writeClipboard': rule(['primary'], 'handle', 'clipboard'),
-  'hermes:vscode-theme:fetch': rule(['primary'], 'handle', 'host-integration'),
-  'hermes:vscode-theme:search': rule(['primary'], 'handle', 'host-integration'),
   'hermes:deep-link-ready': rule(['primary'], 'handle', 'host-integration'),
   'hermes:notify': rule(['primary', 'session', 'hud'], 'handle', 'notification'),
   'hermes:window:openSession': rule(['primary'], 'handle', 'window-control'),

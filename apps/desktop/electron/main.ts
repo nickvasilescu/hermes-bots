@@ -249,7 +249,7 @@ import {
   SESSION_WINDOW_MIN_HEIGHT,
   SESSION_WINDOW_MIN_WIDTH
 } from './session-windows'
-import { registerSkuIntegrations } from './sku-integrations'
+import { registerMarketplaceThemeHandlers, registerSkuIntegrations } from './sku-integrations'
 import { windowsSandboxIntegration } from './sku-integrations.windows-sandbox'
 import { ensureSpawnHelperExecutable } from './spawn-helper-perms'
 import { assertSshOnlyApiRequestAllowed } from './ssh-api-policy'
@@ -283,7 +283,6 @@ import {
   wrapHandoffForDetachedConsole
 } from './updater-process'
 import { formatBlockerMessage, formatProbeFailedMessage, scanVenvBlockers } from './venv-blocker-scan'
-import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
 import { createWakeIndicatorWindowController } from './wake-indicator-window'
 import { decideWebviewAttachment } from './webview-policy'
 import { readWindowBelow } from './window-below'
@@ -12856,12 +12855,7 @@ if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
   })
 }
 
-// Download a VS Code Marketplace extension and return the raw color-theme JSON
-// it contributes. No theme code is executed — we only read JSON from the .vsix.
-ipcMain.handle('hermes:vscode-theme:fetch', async (_event, id) => fetchMarketplaceThemes(String(id || '')))
-
-// Search the Marketplace for color-theme extensions (empty query = top installs).
-ipcMain.handle('hermes:vscode-theme:search', async (_event, query) => searchMarketplaceThemes(String(query || ''), 20))
+registerMarketplaceThemeHandlers?.(ipcMain)
 
 // ---------------------------------------------------------------------------
 // hermes:// deep links (e.g. hermes://blueprint/morning-brief?time=08:00).

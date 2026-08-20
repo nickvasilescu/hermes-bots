@@ -27,6 +27,7 @@ test('SSH-only preload exposes only the main-owned gateway proxy integration', (
     'oauthLoginConnectionConfig',
     'fetchLinkTitle',
     'getBootstrapState',
+    'themes',
     'updates',
     'uninstall'
   ]) {
@@ -44,6 +45,8 @@ test('full-product preload retains its integration surface', () => {
   assert.equal(typeof bridge.oauthLoginConnectionConfig, 'function')
   assert.equal(typeof bridge.fetchLinkTitle, 'function')
   assert.equal(typeof bridge.getBootstrapState, 'function')
+  assert.equal(typeof bridge.themes.fetchMarketplace, 'function')
+  assert.equal(typeof bridge.themes.searchMarketplace, 'function')
   assert.equal(typeof bridge.updates.apply, 'function')
   assert.equal(typeof bridge.uninstall.run, 'function')
 })

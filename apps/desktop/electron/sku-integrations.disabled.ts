@@ -2,3 +2,4 @@
 // makes raw IPC invokes fail closed instead of accepting sensitive arguments in
 // a no-op implementation.
 export const registerSkuIntegrations = undefined
+export const registerMarketplaceThemeHandlers = undefined

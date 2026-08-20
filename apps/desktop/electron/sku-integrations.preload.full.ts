@@ -66,6 +66,10 @@ export function createSkuPreloadBridge(ipcRenderer: IpcRenderer) {
       summary: () => ipcRenderer.invoke('hermes:uninstall:summary'),
       run: mode => ipcRenderer.invoke('hermes:uninstall:run', { mode })
     },
+    themes: {
+      fetchMarketplace: id => ipcRenderer.invoke('hermes:vscode-theme:fetch', id),
+      searchMarketplace: query => ipcRenderer.invoke('hermes:vscode-theme:search', query)
+    },
     updates: {
       check: () => ipcRenderer.invoke('hermes:updates:check'),
       apply: opts => ipcRenderer.invoke('hermes:updates:apply', opts),

@@ -328,10 +328,6 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   },
   getVersion: () => ipcRenderer.invoke('hermes:version'),
   ...createSkuPreloadBridge(ipcRenderer),
-  themes: {
-    fetchMarketplace: id => ipcRenderer.invoke('hermes:vscode-theme:fetch', id),
-    searchMarketplace: query => ipcRenderer.invoke('hermes:vscode-theme:search', query)
-  },
   // Find-in-page (Ctrl/Cmd+F): delegates to Electron's
   // webContents.findInPage on the IPC sender's window so a Cmd+F pressed
   // in a secondary session window searches THAT window, not the primary.
