@@ -1,0 +1,124 @@
+#!@bash@/bin/bash
+set -euo pipefail
+
+die() {
+  echo "korgo-ssh-client: $*" >&2
+  exit 1
+}
+
+uid="$(id -u)"
+runtime_dir="${XDG_RUNTIME_DIR:-}"
+wayland_display="${WAYLAND_DISPLAY:-}"
+host_data_dir="${KORGO_DATA_DIR:-}"
+host_cache_dir="${KORGO_CACHE_DIR:-}"
+
+# Bubblewrap does not enforce destination IP policy. Refuse direct/package-menu
+# launches that would escape the system manager's cgroup BPF allowlist.
+grep -Eq '(^|/)system\.slice/korgo-ssh-client\.service$' /proc/self/cgroup ||
+  die "must run inside the korgo-ssh-client system service"
+
+[[ "$runtime_dir" == "/run/user/$uid" ]] ||
+  die "XDG_RUNTIME_DIR must be the exact per-user runtime directory"
+[[ "$wayland_display" =~ ^wayland-[0-9]+$ ]] ||
+  die "WAYLAND_DISPLAY must name one Wayland socket"
+[[ -n "$host_data_dir" && "$host_data_dir" == /* ]] ||
+  die "KORGO_DATA_DIR must be an absolute dedicated directory"
+[[ -n "$host_cache_dir" && "$host_cache_dir" == /* ]] ||
+  die "KORGO_CACHE_DIR must be an absolute dedicated directory"
+
+secure_directory() {
+  local path="$1"
+  [[ ! -L "$path" ]] || die "refusing symlinked writable directory: $path"
+  install -d -m 0700 -- "$path"
+  [[ ! -L "$path" && -d "$path" ]] || die "writable path is not a directory: $path"
+  [[ "$(stat -c %u -- "$path")" == "$uid" ]] || die "writable directory has the wrong owner: $path"
+  chmod 0700 -- "$path"
+}
+
+secure_directory "$host_data_dir"
+secure_directory "$host_cache_dir"
+
+identity=/run/korgo-ssh/identity
+known_hosts=/run/korgo-ssh/known_hosts
+[[ -f "$identity" && ! -L "$identity" ]] || die "fixed identity is missing or unsafe"
+[[ -f "$known_hosts" && ! -L "$known_hosts" ]] || die "fixed known_hosts is missing or unsafe"
+
+wayland_socket="$runtime_dir/$wayland_display"
+dbus_socket="$runtime_dir/bus"
+[[ -S "$wayland_socket" && ! -L "$wayland_socket" ]] || die "Wayland socket is missing or unsafe"
+[[ -S "$dbus_socket" && ! -L "$dbus_socket" ]] || die "session D-Bus socket is missing or unsafe"
+
+target=@app_executable@
+if [[ "${1:-}" == "--containment-probe" ]]; then
+  target=@probe_executable@
+  shift
+fi
+
+# No directory under the host runtime tree is bound. Each required IPC socket
+# is admitted by exact pathname and gets a matching in-sandbox parent.
+bwrap_args=(
+  --die-with-parent
+  --new-session
+  --unshare-all
+  --share-net
+  --cap-drop ALL
+  --clearenv
+  --unsetenv SSH_AUTH_SOCK
+  --ro-bind /nix/store /nix/store
+  --proc /proc
+  --dev /dev
+  --tmpfs /dev/shm
+  --tmpfs /tmp
+  --dir /home
+  --dir /var
+  --dir /var/empty
+  --dir /var/lib
+  --dir /var/lib/korgo-ssh
+  --dir /var/cache
+  --dir /var/cache/korgo-ssh
+  --dir /run
+  --dir /run/korgo-ssh
+  --dir /run/user
+  --dir "$runtime_dir"
+  --ro-bind "$identity" "$identity"
+  --ro-bind "$known_hosts" "$known_hosts"
+  --bind "$host_data_dir" /var/lib/korgo-ssh
+  --bind "$host_cache_dir" /var/cache/korgo-ssh
+  --bind "$wayland_socket" "$wayland_socket"
+  --bind "$dbus_socket" "$dbus_socket"
+  --setenv HOME /var/empty
+  --setenv XDG_CONFIG_HOME /var/lib/korgo-ssh/config
+  --setenv XDG_DATA_HOME /var/lib/korgo-ssh/data
+  --setenv XDG_CACHE_HOME /var/cache/korgo-ssh
+  --setenv XDG_RUNTIME_DIR "$runtime_dir"
+  --setenv WAYLAND_DISPLAY "$wayland_display"
+  --setenv DBUS_SESSION_BUS_ADDRESS "unix:path=$dbus_socket"
+  --setenv ELECTRON_OZONE_PLATFORM_HINT wayland
+  --setenv ELECTRON_IS_DEV 0
+  --setenv NODE_ENV production
+  --setenv PATH @runtime_path@
+  --setenv LANG C.UTF-8
+  --setenv LC_ALL C.UTF-8
+  --setenv TMPDIR /tmp
+)
+
+# Voice and portal audio need these exact sockets when present. Their parent
+# directories are synthetic; the host runtime directory itself is never bound.
+pipewire_socket="$runtime_dir/pipewire-0"
+if [[ -S "$pipewire_socket" && ! -L "$pipewire_socket" ]]; then
+  bwrap_args+=(
+    --bind "$pipewire_socket" "$pipewire_socket"
+    --setenv PIPEWIRE_REMOTE pipewire-0
+  )
+fi
+
+pulse_socket="$runtime_dir/pulse/native"
+if [[ -S "$pulse_socket" && ! -L "$pulse_socket" ]]; then
+  bwrap_args+=(
+    --dir "$runtime_dir/pulse"
+    --bind "$pulse_socket" "$pulse_socket"
+    --setenv PULSE_SERVER "unix:$pulse_socket"
+  )
+fi
+
+exec @bwrap@ "${bwrap_args[@]}" -- "$target" "$@"

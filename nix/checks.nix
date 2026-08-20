@@ -11,6 +11,20 @@
 
       configMergeScript = pkgs.callPackage ./configMergeScript.nix { };
 
+      korgoContainmentProbe = pkgs.stdenvNoCC.mkDerivation {
+        pname = "korgo-ssh-client-containment-probe";
+        version = "1";
+        dontUnpack = true;
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+        installPhase = ''
+          install -Dm0755 ${../packaging/korgo-ssh-client/korgo-ssh-client-containment-probe} \
+            $out/bin/korgo-ssh-client-containment-probe
+          patchShebangs $out/bin/korgo-ssh-client-containment-probe
+          wrapProgram $out/bin/korgo-ssh-client-containment-probe \
+            --prefix PATH : ${lib.makeBinPath [ pkgs.coreutils pkgs.netcat-openbsd ]}
+        '';
+      };
+
       # Auto-generated config key reference — always in sync with Python
       configKeys = pkgs.runCommand "hermes-config-keys" {} ''
         set -euo pipefail
@@ -33,7 +47,11 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
 ' > $out
       '';
     in {
-      packages.configKeys = configKeys;
+      packages = {
+        configKeys = configKeys;
+      } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        korgo-ssh-client-containment-probe = korgoContainmentProbe;
+      };
 
       checks = {
         # Cross-platform evaluation — catches "not supported for interpreter"
@@ -75,6 +93,47 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           echo "ok" > $out/result
         '';
       } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        # Static policy proof plus the executable dummy probe. The live G3
+        # matrix still has to run this probe under the installed system unit;
+        # a Nix build sandbox cannot prove the host's cgroup-BPF enforcement.
+        korgo-ssh-client-containment = pkgs.runCommand "korgo-ssh-client-containment" { } ''
+          set -euo pipefail
+          launcher=${../packaging/korgo-ssh-client/korgo-ssh-client-bwrap}
+          probe=${../packaging/korgo-ssh-client/korgo-ssh-client-containment-probe}
+          unit=${../packaging/korgo-ssh-client/korgo-ssh-client.service}
+          package_nix=${./korgo-ssh-client.nix}
+
+          grep -F -- '--clearenv' "$launcher"
+          grep -F -- 'must run inside the korgo-ssh-client system service' "$launcher"
+          grep -F -- '--unsetenv SSH_AUTH_SOCK' "$launcher"
+          grep -F -- '--ro-bind /nix/store /nix/store' "$launcher"
+          grep -F -- '--ro-bind "$identity" "$identity"' "$launcher"
+          grep -F -- '--ro-bind "$known_hosts" "$known_hosts"' "$launcher"
+          grep -F -- '--bind "$wayland_socket" "$wayland_socket"' "$launcher"
+          ! grep -E -- '--(ro-)?bind[^#]*(\$HOME|"\$runtime_dir"[[:space:]]+"\$runtime_dir")' "$launcher"
+
+          grep -F -- 'SSH_AUTH_SOCK is present' "$probe"
+          grep -F -- 'cannot stat forbidden dummy marker' "$probe"
+          grep -F -- 'dummy identity is writable' "$probe"
+          grep -F -- 'dummy known_hosts is writable' "$probe"
+          grep -F -- 'approved endpoint did not connect' "$probe"
+          grep -F -- 'unapproved endpoint connected' "$probe"
+          test -x ${korgoContainmentProbe}/bin/korgo-ssh-client-containment-probe
+
+          grep -F 'electronVersion = "43.4.1";' "$package_nix"
+          grep -F 'electron-v''${electronVersion}-linux-x64.zip' "$package_nix"
+          grep -F 'node-v''${electronVersion}-headers.tar.gz' "$package_nix"
+          grep -F 'requires electronArchiveHash' "$package_nix"
+          grep -F 'requires electronHeadersHash' "$package_nix"
+          grep -F 'IPAddressDeny=any' "$unit"
+          grep -F 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' "$unit"
+          grep -F 'ProtectHome=tmpfs' "$unit"
+          grep -F 'DevicePolicy=closed' "$unit"
+
+          mkdir -p $out
+          printf 'ok\n' > $out/result
+        '';
+
         # Verify binaries exist and are executable
         package-contents = pkgs.runCommand "hermes-package-contents" { } ''
           set -e

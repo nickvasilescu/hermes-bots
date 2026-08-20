@@ -1,0 +1,51 @@
+[Unit]
+Description=Korgo SSH-only desktop containment policy (fail-closed reference)
+Documentation=https://github.com/nickvasilescu/hermes-bots/blob/main/docs/korgo-linux-ssh-only.md
+After=graphical.target network-online.target
+Wants=network-online.target
+ConditionPathExists=/run/korgo-ssh/identity
+ConditionPathExists=/run/korgo-ssh/known_hosts
+ConditionPathExists=/run/user/1000/wayland-1
+
+[Service]
+Type=simple
+# This checked-in unit is deliberately non-operational: the reusable NixOS
+# module supplies the reviewed user, UID, package, source binds, and exact Mini
+# address. Keeping the reference ExecStart inert prevents a copied template
+# from launching without those inputs.
+ExecStart=/run/current-system/sw/bin/false
+# The generated module supplies a reviewed unprivileged User=/Group=. The
+# checked-in reference remains inert and is never installed.
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=disconnected
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectSystem=strict
+ProtectHome=tmpfs
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=127.0.0.0/8
+IPAddressAllow=::1/128
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+KeyringMode=private
+SystemCallArchitectures=native
+MemoryMax=2G
+TasksMax=512
+LimitNOFILE=4096
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=45s
+TimeoutStopSec=20s
+
+[Install]
+# The NixOS module owns installation. This fail-closed reference has no target.

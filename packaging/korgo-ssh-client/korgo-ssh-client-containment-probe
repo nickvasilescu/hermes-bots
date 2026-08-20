@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+pass() {
+  echo "PASS: $*"
+}
+
+forbidden_paths=()
+allowed_endpoints=()
+denied_endpoints=()
+
+while (($#)); do
+  case "$1" in
+    --forbid)
+      (($# >= 2)) || fail "--forbid needs an absolute dummy marker path"
+      forbidden_paths+=("$2")
+      shift 2
+      ;;
+    --expect-connect)
+      (($# >= 2)) || fail "--expect-connect needs numeric-address:port"
+      allowed_endpoints+=("$2")
+      shift 2
+      ;;
+    --expect-denied)
+      (($# >= 2)) || fail "--expect-denied needs numeric-address:port"
+      denied_endpoints+=("$2")
+      shift 2
+      ;;
+    *) fail "unknown argument: $1" ;;
+  esac
+done
+
+[[ "${HOME:-}" == /var/empty ]] || fail "HOME was not replaced"
+[[ -z "${SSH_AUTH_SOCK+x}" ]] || fail "SSH_AUTH_SOCK is present"
+pass "broad HOME and SSH agent environment are absent"
+
+for path in "${forbidden_paths[@]}"; do
+  [[ "$path" == /* ]] || fail "forbidden marker path must be absolute"
+  if stat -- "$path" >/dev/null 2>&1; then
+    fail "sandbox can stat forbidden dummy marker: $path"
+  fi
+  pass "cannot stat forbidden dummy marker: $path"
+done
+
+[[ -f /run/korgo-ssh/identity ]] || fail "fixed dummy identity is absent"
+[[ -f /run/korgo-ssh/known_hosts ]] || fail "fixed dummy known_hosts is absent"
+if printf 'mutation\n' >>/run/korgo-ssh/identity 2>/dev/null; then
+  fail "dummy identity is writable"
+fi
+if printf 'mutation\n' >>/run/korgo-ssh/known_hosts 2>/dev/null; then
+  fail "dummy known_hosts is writable"
+fi
+pass "fixed dummy SSH inputs are present and read-only"
+
+split_endpoint() {
+  local endpoint="$1"
+  endpoint_host="${endpoint%:*}"
+  endpoint_port="${endpoint##*:}"
+  [[ "$endpoint_host" != "$endpoint" && "$endpoint_port" =~ ^[0-9]+$ ]] ||
+    fail "endpoint must be numeric-address:port: $endpoint"
+}
+
+for endpoint in "${allowed_endpoints[@]}"; do
+  split_endpoint "$endpoint"
+  nc -z -w 2 -- "$endpoint_host" "$endpoint_port" ||
+    fail "approved endpoint did not connect: $endpoint"
+  pass "approved endpoint connected: $endpoint"
+done
+
+for endpoint in "${denied_endpoints[@]}"; do
+  split_endpoint "$endpoint"
+  if nc -z -w 2 -- "$endpoint_host" "$endpoint_port"; then
+    fail "unapproved endpoint connected: $endpoint"
+  fi
+  pass "unapproved endpoint denied: $endpoint"
+done
+
+pass "containment probe complete"

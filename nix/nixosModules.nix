@@ -24,6 +24,8 @@
 #   };
 #
 { inputs, ... }: {
+  flake.nixosModules.korgo-ssh-client = import ./korgo-ssh-client-module.nix;
+
   flake.nixosModules.default = { config, lib, pkgs, ... }:
 
   let
