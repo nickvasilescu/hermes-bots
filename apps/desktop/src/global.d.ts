@@ -1192,3 +1192,31 @@ export interface BackendExit {
   code: number | null
   signal: string | null
 }
+
+export type HermesDesktopBridge = Window['hermesDesktop']
+
+/**
+ * Compile-time shape of the bridge installed by the SSH-only preload entry.
+ * The ambient Window declaration remains the full-product authoring contract;
+ * runtime SKU selection removes these properties entirely.
+ */
+export type SshOnlyDesktopBridge = Omit<
+  HermesDesktopBridge,
+  | 'cancelBootstrap'
+  | 'cloud'
+  | 'connectors'
+  | 'continueBootstrapLocal'
+  | 'fetchLinkTitle'
+  | 'getBootstrapState'
+  | 'getRemoteDisplayReason'
+  | 'oauthLoginConnectionConfig'
+  | 'oauthLogoutConnectionConfig'
+  | 'onBootstrapEvent'
+  | 'onOpenUpdatesRequested'
+  | 'orgoDesktop'
+  | 'probeConnectionConfig'
+  | 'repairBootstrap'
+  | 'resetBootstrap'
+  | 'uninstall'
+  | 'updates'
+>

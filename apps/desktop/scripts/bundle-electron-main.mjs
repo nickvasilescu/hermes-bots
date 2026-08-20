@@ -39,7 +39,73 @@ const linkTitleIntegration = resolve(
   root,
   sku === 'bot-ssh-only' ? 'electron/link-title-integration.disabled.ts' : 'electron/link-title-integration.full.ts'
 )
-const alias = { './link-title-integration': linkTitleIntegration }
+const preloadSkuIntegration = resolve(
+  root,
+  sku === 'bot-ssh-only' ? 'electron/sku-integrations.preload.disabled.ts' : 'electron/sku-integrations.preload.full.ts'
+)
+const mainSkuIntegration = resolve(
+  root,
+  sku === 'bot-ssh-only' ? 'electron/sku-integrations.disabled.ts' : 'electron/sku-integrations.full.ts'
+)
+const windowsSandboxIntegration = resolve(
+  root,
+  sku === 'bot-ssh-only'
+    ? 'electron/sku-integrations.windows-sandbox.disabled.ts'
+    : 'electron/sku-integrations.windows-sandbox.full.ts'
+)
+const bootstrapIntegration = resolve(root, 'electron/sku-integrations.bootstrap.disabled.ts')
+const orgoBrokerIntegration = resolve(root, 'electron/sku-integrations.orgo-broker.disabled.ts')
+const orgoDesktopIntegration = resolve(root, 'electron/sku-integrations.orgo-desktop.disabled.ts')
+const nativeAuthIntegration = resolve(root, 'electron/sku-integrations.native-auth.disabled.ts')
+const nativeOauthIntegration = resolve(root, 'electron/sku-integrations.native-oauth.disabled.ts')
+const nativeOauthLoginIntegration = resolve(root, 'electron/sku-integrations.native-oauth-login.disabled.ts')
+const nativeTokenStoreIntegration = resolve(root, 'electron/sku-integrations.native-token-store.disabled.ts')
+const oauthNetIntegration = resolve(root, 'electron/sku-integrations.oauth-net.disabled.ts')
+const skuIntegrationAliases = {
+  './link-title-integration': linkTitleIntegration,
+  './sku-integrations.preload': preloadSkuIntegration,
+  './sku-integrations': mainSkuIntegration,
+  './sku-integrations.windows-sandbox': windowsSandboxIntegration,
+  ...(sku === 'bot-ssh-only'
+    ? {
+        './bootstrap-runner': bootstrapIntegration,
+        './orgo-broker': orgoBrokerIntegration,
+        './orgo-desktop': orgoDesktopIntegration,
+        './native-auth-decisions': nativeAuthIntegration,
+        './native-oauth': nativeOauthIntegration,
+        './native-oauth-login': nativeOauthLoginIntegration,
+        './native-token-store': nativeTokenStoreIntegration,
+        './oauth-net-request': oauthNetIntegration
+      }
+    : {})
+}
+const skuIntegrationPlugin = {
+  name: 'desktop-sku-integrations',
+  setup(build) {
+    build.onResolve({ filter: /^\.\/link-title-integration$/ }, args => ({
+      path: skuIntegrationAliases[args.path]
+    }))
+    build.onResolve({ filter: /^\.\/sku-integrations\.preload$/ }, args => ({
+      path: skuIntegrationAliases[args.path]
+    }))
+    build.onResolve({ filter: /^\.\/sku-integrations$/ }, args => ({
+      path: skuIntegrationAliases[args.path]
+    }))
+    build.onResolve({ filter: /^\.\/sku-integrations\.windows-sandbox$/ }, args => ({
+      path: skuIntegrationAliases[args.path]
+    }))
+    if (sku === 'bot-ssh-only') {
+      build.onResolve({ filter: /^\.\/bootstrap-runner$/ }, args => ({ path: skuIntegrationAliases[args.path] }))
+      build.onResolve({ filter: /^\.\/orgo-broker$/ }, args => ({ path: skuIntegrationAliases[args.path] }))
+      build.onResolve({ filter: /^\.\/orgo-desktop$/ }, args => ({ path: skuIntegrationAliases[args.path] }))
+      build.onResolve({ filter: /^\.\/native-auth-decisions$/ }, args => ({ path: skuIntegrationAliases[args.path] }))
+      build.onResolve({ filter: /^\.\/native-oauth$/ }, args => ({ path: skuIntegrationAliases[args.path] }))
+      build.onResolve({ filter: /^\.\/native-oauth-login$/ }, args => ({ path: skuIntegrationAliases[args.path] }))
+      build.onResolve({ filter: /^\.\/native-token-store$/ }, args => ({ path: skuIntegrationAliases[args.path] }))
+      build.onResolve({ filter: /^\.\/oauth-net-request$/ }, args => ({ path: skuIntegrationAliases[args.path] }))
+    }
+  }
+}
 const define = isDev
   ? {}
   : {
@@ -61,8 +127,10 @@ await build({
   format: 'esm',
   target: 'node20',
   outfile: mainOut,
+  minifyIdentifiers: !isDev,
+  minifySyntax: !isDev,
   external,
-  alias,
+  plugins: [skuIntegrationPlugin],
   banner: {
     js: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);"
   },
@@ -79,8 +147,10 @@ await build({
   format: 'cjs',
   target: 'node20',
   outfile: preloadOut,
+  minifyIdentifiers: !isDev,
+  minifySyntax: !isDev,
   external,
-  alias,
+  plugins: [skuIntegrationPlugin],
   define,
   logLevel: 'info'
 })

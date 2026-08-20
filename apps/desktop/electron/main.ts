@@ -162,7 +162,7 @@ import { cursorPointInWindow } from './hud-cursor'
 import { snapHudBounds } from './hud-snap'
 import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
-import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
+import { registerLinkTitleIntegration } from './link-title-integration'
 import { ensureMainWindow } from './main-window-lifecycle'
 import {
   oauthGuardMayHardFail,
@@ -243,6 +243,7 @@ import {
   SESSION_WINDOW_MIN_HEIGHT,
   SESSION_WINDOW_MIN_WIDTH
 } from './session-windows'
+import { registerSkuIntegrations } from './sku-integrations'
 import { ensureSpawnHelperExecutable } from './spawn-helper-perms'
 import { createBootstrapCoordinator, sshConfigFingerprint } from './ssh-bootstrap-coordinator'
 import { collectSshConfigHosts, parseSshGOutput } from './ssh-config'
@@ -265,7 +266,6 @@ import {
   resolvePosixScriptHandoff,
   resolveStagedUpdaterBinary,
   resolveUpdateScriptHandoff,
-  sandboxFallbackFromEnv,
   spawnUpdaterProcess,
   stagedUpdaterSupportsPrewrittenMarker,
   wrapHandoffForDetachedConsole
@@ -297,20 +297,7 @@ import {
   detectRemotePlatform,
   helper
 } from './windows-remote-lifecycle'
-import {
-  alreadyHasNoSandbox,
-  buildNoSandboxRelaunchArgs,
-  decideWindowsSandboxLaunch,
-  fallbackMarker,
-  grantAllApplicationPackagesAcl,
-  markerAfterSuccessfulBoot,
-  readSandboxMarker,
-  type SandboxFallbackReason,
-  shouldAttemptAclRepair,
-  shouldRelaunchForGpuSandboxCrash,
-  shouldRelaunchForRendererSandboxCrashLoop,
-  writeSandboxMarker
-} from './windows-sandbox-fallback'
+import { windowsSandboxIntegration } from './sku-integrations.windows-sandbox'
 import { installWindowsSystemCaTrust } from './windows-system-ca'
 import { readWindowsUserEnvVar } from './windows-user-env'
 import { isPackagedInstallPath as isPackagedInstallPathUnderRoots } from './workspace-cwd'
@@ -412,108 +399,13 @@ if (PASSWORD_STORE.store) {
   console.log(`[hermes] using password-store backend: ${PASSWORD_STORE.store}`)
 }
 
-// Windows sandbox / GPU breakpoint crash recovery (#38216).
-//
-// Some hosts (AMD RX 6000 drivers, orphan AppContainer SIDs under %LOCALAPPDATA%,
-// missing S-1-15-2-2 ACEs) kill Chromium's sandboxed GPU/renderer children with
-// 0x80000003. After enough GPU deaths the browser process FATAL-exits before the
-// UI is usable. Must run before app `ready` so `--no-sandbox` applies to child
-// processes. The sticky marker recovers Start Menu / shortcut launches that
-// never go through `hermes desktop`; it is version-scoped so an app update
-// re-probes the sandbox instead of degrading forever.
-//
-// `windowsSandboxFallbackActive` = this process runs without the Chromium
-// sandbox (any cause, including a manual --no-sandbox flag) — guards the
-// relaunch handlers. `windowsSandboxFallbackSticky` = the fallback machinery
-// engaged and the marker must stay `fallback` after a successful boot; a
-// manual flag alone is honored but never made sticky.
-let windowsSandboxFallbackActive = false
-let windowsSandboxFallbackSticky = false
-let windowsSandboxFallbackReason: SandboxFallbackReason = 'boot-loop'
-let windowsNoSandboxRelaunchAttempted = false
+windowsSandboxIntegration?.initialize(app, execFileSync)
 
-if (IS_WINDOWS) {
-  const windowsUserData = app.getPath('userData')
-  const priorMarker = readSandboxMarker(windowsUserData)
-
-  // Best-effort ACL repair, only when the last boot aborted or the fallback is
-  // engaged — icacls /T recurses the whole install tree, so healthy launches
-  // skip it (the installer already granted the ACE at install time). Repair
-  // targets the install dir only: granting AppContainer read on userData would
-  // expose Hermes sessions/config to every packaged app on the machine.
-  if (shouldAttemptAclRepair(priorMarker)) {
-    const exeDir = path.dirname(process.execPath)
-    const acl = grantAllApplicationPackagesAcl(exeDir, { execFileSync })
-
-    if (acl.ok) {
-      console.log(`[hermes] granted ALL APPLICATION PACKAGES RX on ${exeDir} (#38216)`)
-    } else if (acl.error && acl.error !== 'missing-target-or-exec') {
-      console.warn(`[hermes] AppContainer ACL grant failed on ${exeDir}: ${acl.error}`)
-    }
-  }
-
-  const sandboxDecision = decideWindowsSandboxLaunch({
-    argv: process.argv,
-    env: process.env,
-    marker: priorMarker,
-    appVersion: app.getVersion()
-  })
-
-  windowsSandboxFallbackActive = sandboxDecision.enable
-  windowsSandboxFallbackSticky = sandboxDecision.nextMarker.state === 'fallback'
-
-  if (sandboxDecision.nextMarker.state === 'fallback' && sandboxDecision.nextMarker.reason) {
-    windowsSandboxFallbackReason = sandboxDecision.nextMarker.reason
-  }
-
-  if (sandboxDecision.enable && sandboxDecision.reason !== 'already-enabled') {
-    app.commandLine.appendSwitch('no-sandbox')
-    process.env.ELECTRON_DISABLE_SANDBOX = '1'
-    console.log(
-      `[hermes] Windows sandbox fallback enabled (${sandboxDecision.reason}); launching with --no-sandbox (#38216)`
-    )
-  }
-
-  writeSandboxMarker(windowsUserData, sandboxDecision.nextMarker)
-
-  // Catch the first GPU breakpoint death and relaunch before Chromium's
-  // "GPU process isn't usable" FATAL abort ends the process with no recovery.
-  app.on('child-process-gone', (_event, details) => {
-    if (
-      !shouldRelaunchForGpuSandboxCrash({
-        details,
-        alreadyNoSandbox: windowsSandboxFallbackActive || alreadyHasNoSandbox(process.argv, process.env),
-        relaunchAttempted: windowsNoSandboxRelaunchAttempted
-      })
-    ) {
-      return
-    }
-
-    windowsNoSandboxRelaunchAttempted = true
-    windowsSandboxFallbackActive = true
-    windowsSandboxFallbackSticky = true
-    windowsSandboxFallbackReason = 'gpu-breakpoint'
-
-    try {
-      writeSandboxMarker(app.getPath('userData'), fallbackMarker('gpu-breakpoint', app.getVersion()))
-    } catch {
-      void 0
-    }
-
-    console.warn(
-      `[hermes] Windows GPU sandbox crashed (exit=${details?.exitCode}); relaunching once with --no-sandbox (#38216)`
-    )
-
-    try {
-      app.relaunch({ args: buildNoSandboxRelaunchArgs(process.argv.slice(1)) })
-      app.exit(0)
-    } catch (error) {
-      console.error(`[hermes] --no-sandbox relaunch failed: ${error?.message || error}`)
-    }
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.handle('hermes:get-remote-display-reason', () => REMOTE_DISPLAY_REASON)
   })
 }
-
-ipcMain.handle('hermes:get-remote-display-reason', () => REMOTE_DISPLAY_REASON)
 
 // Keep the renderer's PROCESS priority normal while its windows are hidden —
 // a deprioritized renderer streams a live answer visibly slower once the
@@ -552,6 +444,8 @@ const SOURCE_REPO_ROOT = path.resolve(APP_ROOT, '../..')
 const INSTALL_STAMP_SCHEMA_VERSION = 1
 
 function loadInstallStamp() {
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return null
+
   // Try packaged location first (resources/install-stamp.json), then the
   // dev/local build output (apps/desktop/build/install-stamp.json) so
   // someone running `npm run start` after a local `npm run build` also
@@ -594,18 +488,20 @@ function loadInstallStamp() {
   return null
 }
 
-const INSTALL_STAMP = loadInstallStamp()
+const INSTALL_STAMP = process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? null : loadInstallStamp()
 
-if (INSTALL_STAMP) {
-  console.log(
-    `[hermes] install stamp: ${INSTALL_STAMP.commit.slice(0, 12)}${INSTALL_STAMP.branch ? ` (${INSTALL_STAMP.branch})` : ''}${INSTALL_STAMP.dirty ? ' [DIRTY]' : ''} from ${INSTALL_STAMP.source || 'unknown'}`
-  )
-} else if (IS_PACKAGED) {
-  // Dev builds without a stamp are normal; packaged builds without one
-  // mean the bootstrap won't know what to clone. Surface clearly.
-  console.error(
-    '[hermes] WARNING: no install-stamp.json found in packaged build. First-launch bootstrap will not have a pinned ref to install.'
-  )
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  if (INSTALL_STAMP) {
+    console.log(
+      `[hermes] install stamp: ${INSTALL_STAMP.commit.slice(0, 12)}${INSTALL_STAMP.branch ? ` (${INSTALL_STAMP.branch})` : ''}${INSTALL_STAMP.dirty ? ' [DIRTY]' : ''} from ${INSTALL_STAMP.source || 'unknown'}`
+    )
+  } else if (IS_PACKAGED) {
+    // Dev builds without a stamp are normal; packaged builds without one
+    // mean the bootstrap won't know what to clone. Surface clearly.
+    console.error(
+      '[hermes] WARNING: no install-stamp.json found in packaged build. First-launch bootstrap will not have a pinned ref to install.'
+    )
+  }
 }
 
 // HERMES_HOME — the user-facing root for everything Hermes-related. Mirrors
@@ -691,7 +587,8 @@ const BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, '.hermes-bootstr
 const BOOTSTRAP_MARKER_SCHEMA_VERSION = 1
 
 const DESKTOP_CONNECTION_CONFIG_PATH = path.join(app.getPath('userData'), 'connection.json')
-const DESKTOP_ORGO_CONFIG_PATH = path.join(app.getPath('userData'), 'orgo-desktop.json')
+const DESKTOP_ORGO_CONFIG_PATH =
+  process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? '' : path.join(app.getPath('userData'), 'orgo-desktop.json')
 const DESKTOP_INSTALLATION_PATH = path.join(app.getPath('userData'), 'desktop-installation.json')
 const DESKTOP_UPDATE_CONFIG_PATH = path.join(app.getPath('userData'), 'updates.json')
 const DESKTOP_WINDOW_STATE_PATH = path.join(app.getPath('userData'), 'window-state.json')
@@ -1607,6 +1504,8 @@ let bootstrapState = {
 let firstRunSetupGate = null
 
 function broadcastBootstrapEvent(ev) {
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return
+
   if (ev.type === 'manifest') {
     bootstrapState.manifest = ev
     bootstrapState.active = true
@@ -2050,7 +1949,12 @@ function backendSupportsServe(backend) {
       // and its timeout-only retry instead of a thinner local bound.
       execProbeSync(backend.command, [...prefix, 'serve', '--help'], {
         cwd: backend.root || undefined,
-        env: { ...process.env, HERMES_HOME, ...(backend.env || {}), ...orgoBackendEnv() },
+        env: {
+          ...process.env,
+          HERMES_HOME,
+          ...(backend.env || {}),
+          ...(process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? {} : orgoBackendEnv())
+        },
         timeout: PROBE_TIMEOUT_MS,
         stdio: 'ignore',
         // `.cmd`/`.bat` shim backends carry shell: true in their descriptor
@@ -3477,9 +3381,7 @@ async function applyUpdatesPosixHandoff(opts: any) {
   if (!IS_MAC) {
     args.push('--relaunch-cwd', process.cwd())
 
-    if (sandboxFallbackFromEnv(process.env, relaunchArgs)) {
-      args.push('--sandbox-fallback')
-    }
+    windowsSandboxIntegration?.appendUpdaterFallback(args, relaunchArgs)
 
     if (relaunchArgs.length) {
       args.push('--', ...relaunchArgs)
@@ -3807,6 +3709,10 @@ function createActiveBackend(backendArgs) {
 }
 
 function resolveHermesBackend(backendArgs) {
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    throw new Error('The SSH-only product has no local runtime resolver.')
+  }
+
   // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
   //    checkout. Honour it as-is (no bootstrap; the user is driving).
   const overrideRoot = process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)
@@ -3984,6 +3890,10 @@ function resolveHermesBackend(backendArgs) {
 }
 
 async function ensureRuntime(backend) {
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    throw new Error('The SSH-only product has no local bootstrap runner.')
+  }
+
   if (!backend.bootstrap) {
     await advanceBootProgress('runtime.external', `Using ${backend.label}`, 32)
 
@@ -4406,297 +4316,7 @@ function filenameFromUrl(rawUrl, fallback = 'image') {
   }
 }
 
-// Link title resolution — curl (tier 1) → hidden BrowserWindow (tier 2).
-const titleCache = new Map()
-const titleInflight = new Map()
-const TITLE_CACHE_LIMIT = 500
-const TITLE_BYTE_BUDGET = 96 * 1024
-const TITLE_TIMEOUT_MS = 5000
-const TITLE_MAX_REDIRECTS = 3
-
-// Browser-shaped UA — many bot-walled sites (GetYourGuide, Cloudflare-protected
-// pages) refuse anything that doesn't look like a real Chrome.
-const TITLE_USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36'
-
-const TITLE_ERROR_RE =
-  /\b(access denied|attention required|captcha|error|forbidden|just a moment|request blocked|too many requests)\b/i
-
-const HTML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" }
-
-// Tier-2 renderer fallback config. Only invoked when curl came back empty or
-// matched TITLE_ERROR_RE — keeps cold/CDN-cached pages on the cheap path.
-const RENDER_TITLE_MAX_CONCURRENT = 2
-const RENDER_TITLE_TIMEOUT_MS = 8000
-const RENDER_TITLE_GRACE_MS = 700
-
-// Resource types we cancel before the network even fires — keeps the hidden
-// renderer fast and cuts third-party tracking noise.
-const RENDER_TITLE_BLOCKED_RESOURCES = new Set([
-  'cspReport',
-  'font',
-  'imageset',
-  'media',
-  'object',
-  'ping',
-  'stylesheet'
-])
-
-let linkTitleSession = null
 let oauthSession = null
-let renderTitleInFlight = 0
-const renderTitleQueue = []
-
-function canonicalTitleCacheKey(rawUrl) {
-  const value = String(rawUrl || '').trim()
-
-  if (!value) {
-    return ''
-  }
-
-  try {
-    const url = new URL(value)
-    const host = url.hostname.replace(/^www\./i, '').toLowerCase()
-    const pathname = url.pathname === '/' ? '/' : url.pathname.replace(/\/+$/, '') || '/'
-
-    return `${host}${pathname}${url.search || ''}`
-  } catch {
-    return value
-  }
-}
-
-function cacheTitle(key, title) {
-  if (titleCache.size >= TITLE_CACHE_LIMIT) {
-    titleCache.delete(titleCache.keys().next().value)
-  }
-
-  titleCache.set(key, title)
-}
-
-function decodeHtmlEntities(value) {
-  return value
-    .replace(/&(amp|lt|gt|quot|apos|nbsp|#39);/gi, (_, k) => HTML_ENTITIES[k.toLowerCase()] ?? '')
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16) || 32))
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10) || 32))
-}
-
-function parseHtmlTitle(html) {
-  const raw = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
-
-  return raw ? decodeHtmlEntities(raw).replace(/\s+/g, ' ').trim() : ''
-}
-
-function fetchHtmlTitleWithCurl(rawUrl: string): Promise<string> {
-  return new Promise(resolve => {
-    const url = String(rawUrl || '').trim()
-
-    if (!url) {
-      return resolve('')
-    }
-
-    const args = [
-      '--silent',
-      '--show-error',
-      '--location',
-      '--max-redirs',
-      String(TITLE_MAX_REDIRECTS),
-      '--max-time',
-      String(Math.max(2, Math.ceil(TITLE_TIMEOUT_MS / 1000))),
-      '--connect-timeout',
-      '4',
-      '--user-agent',
-      TITLE_USER_AGENT,
-      '--header',
-      'Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.5',
-      '--header',
-      'Accept-Language: en-US,en;q=0.7',
-      '--header',
-      'Accept-Encoding: identity',
-      '--raw',
-      url
-    ]
-
-    const child = spawn('curl', args, hiddenWindowsChildOptions({ stdio: ['ignore', 'pipe', 'ignore'] }))
-    const chunks = []
-    let bytes = 0
-
-    child.stdout.on('data', chunk => {
-      if (bytes >= TITLE_BYTE_BUDGET) {
-        return
-      }
-
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-      const remaining = TITLE_BYTE_BUDGET - bytes
-      const next = buffer.length > remaining ? buffer.subarray(0, remaining) : buffer
-      chunks.push(next)
-      bytes += next.length
-    })
-
-    child.on('error', () => resolve(''))
-    child.on('close', () => {
-      if (!chunks.length) {
-        return resolve('')
-      }
-
-      resolve(parseHtmlTitle(Buffer.concat(chunks).toString('utf8')))
-    })
-  })
-}
-
-function getLinkTitleSession() {
-  if (linkTitleSession || !app.isReady()) {
-    return linkTitleSession
-  }
-
-  linkTitleSession = session.fromPartition('hermes:link-titles', { cache: false })
-  linkTitleSession.webRequest.onBeforeRequest((details, callback) => {
-    callback({ cancel: RENDER_TITLE_BLOCKED_RESOURCES.has(details.resourceType) })
-  })
-  guardLinkTitleSession(linkTitleSession)
-
-  return linkTitleSession
-}
-
-function dequeueRenderTitle() {
-  while (renderTitleInFlight < RENDER_TITLE_MAX_CONCURRENT && renderTitleQueue.length) {
-    const item = renderTitleQueue.shift()
-    renderTitleInFlight += 1
-    runRenderTitleJob(item.url).then(title => {
-      renderTitleInFlight -= 1
-      item.resolve(title)
-      dequeueRenderTitle()
-    })
-  }
-}
-
-function runRenderTitleJob(rawUrl) {
-  return new Promise(resolve => {
-    if (!app.isReady()) {
-      return resolve('')
-    }
-
-    const partitionSession = getLinkTitleSession()
-
-    if (!partitionSession) {
-      return resolve('')
-    }
-
-    let settled = false
-    let window = null
-    let hardTimer = null
-    let graceTimer = null
-
-    const finish = title => {
-      if (settled) {
-        return
-      }
-
-      settled = true
-
-      if (hardTimer) {
-        clearTimeout(hardTimer)
-      }
-
-      if (graceTimer) {
-        clearTimeout(graceTimer)
-      }
-
-      const value = (title || '').replace(/\s+/g, ' ').trim()
-
-      try {
-        if (window && !window.isDestroyed()) {
-          window.destroy()
-        }
-      } catch {
-        // BrowserWindow may already be torn down; ignore.
-      }
-
-      resolve(value)
-    }
-
-    try {
-      window = createLinkTitleWindow(BrowserWindow, partitionSession)
-    } catch {
-      return finish('')
-    }
-
-    const finishWithTitle = () => finish(readLinkTitleWindowTitle(window))
-
-    const scheduleGrace = () => {
-      if (graceTimer) {
-        clearTimeout(graceTimer)
-      }
-
-      graceTimer = setTimeout(finishWithTitle, RENDER_TITLE_GRACE_MS)
-    }
-
-    hardTimer = setTimeout(finishWithTitle, RENDER_TITLE_TIMEOUT_MS)
-
-    window.webContents.setUserAgent(TITLE_USER_AGENT)
-    window.webContents.on('page-title-updated', scheduleGrace)
-    window.webContents.on('did-finish-load', scheduleGrace)
-    window.webContents.on('did-fail-load', (_event, _code, _desc, _validatedURL, isMainFrame) => {
-      if (isMainFrame) {
-        finish('')
-      }
-    })
-
-    window
-      .loadURL(rawUrl, {
-        httpReferrer: 'https://www.google.com/',
-        userAgent: TITLE_USER_AGENT
-      })
-      .catch(() => finish(''))
-  })
-}
-
-function fetchHtmlTitleWithRenderer(rawUrl: string): Promise<string> {
-  return new Promise(resolve => {
-    renderTitleQueue.push({ resolve, url: rawUrl })
-    dequeueRenderTitle()
-  })
-}
-
-// Strips known error/captcha titles (e.g. "GetYourGuide – Error", "Just a
-// moment...") so they don't get cached as the resolved title.
-function usableTitle(value: string): string {
-  return value && !TITLE_ERROR_RE.test(value) ? value : ''
-}
-
-function fetchLinkTitle(rawUrl) {
-  const url = String(rawUrl || '').trim()
-  const key = canonicalTitleCacheKey(url)
-
-  if (!key) {
-    return Promise.resolve('')
-  }
-
-  if (titleCache.has(key)) {
-    return Promise.resolve(titleCache.get(key))
-  }
-
-  if (titleInflight.has(key)) {
-    return titleInflight.get(key)
-  }
-
-  const pending = fetchHtmlTitleWithCurl(url)
-    .catch(() => '')
-    .then(value => usableTitle((value || '').slice(0, 240)))
-    .then(
-      async value => value || usableTitle(((await fetchHtmlTitleWithRenderer(url).catch(() => '')) || '').slice(0, 240))
-    )
-    .then(clean => {
-      cacheTitle(key, clean)
-      titleInflight.delete(key)
-
-      return clean
-    })
-
-  titleInflight.set(key, pending)
-
-  return pending
-}
-
 async function resourceBufferFromUrl(rawUrl) {
   if (!rawUrl) {
     throw new Error('Missing URL')
@@ -5784,9 +5404,11 @@ function installMediaPermissions() {
 //     "is the user signed in at all?" gate / display signal.
 // ---------------------------------------------------------------------------
 
-const OAUTH_SESSION_PARTITION = 'persist:hermes-remote-oauth'
+const OAUTH_SESSION_PARTITION = process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? '' : 'persist:hermes-remote-oauth'
 
 function getOauthSession() {
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return null
+
   if (oauthSession || !app.isReady()) {
     return oauthSession
   }
@@ -6236,6 +5858,8 @@ function fetchJsonViaOauthSession(url, options: any = {}) {
 const _nativeTokens = new Map<string, NativeTokenSet>()
 
 function _nativeTokenStorePath() {
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return ''
+
   // Co-located with the connection config under userData; one JSON file mapping
   // baseUrl → { encoding, value } safeStorage payloads.
   return path.join(app.getPath('userData'), 'native-oauth-tokens.json')
@@ -6359,10 +5983,14 @@ function _nativeTokenStoreIo(): NativeTokenStoreIo {
 }
 
 function _persistNativeTokens(baseUrl: string, tokens: NativeTokenSet | null) {
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return
+
   persistNativeTokenSet(baseUrl, tokens, _nativeTokenStoreIo())
 }
 
 function _loadNativeTokens(baseUrl: string): NativeTokenSet | null {
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return null
+
   const cached = _nativeTokens.get(baseUrl)
 
   if (cached) {
@@ -6410,6 +6038,8 @@ function postJsonNoAuth(url: string, body: unknown, opts: any = {}) {
 // /auth/native/refresh if the stored one is at/near expiry. Returns null when
 // there are no tokens or the refresh is terminally rejected (caller re-logins).
 async function ensureNativeAccessToken(baseUrl: string): Promise<string | null> {
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') return null
+
   const tokens = _loadNativeTokens(baseUrl)
 
   if (!tokens) {
@@ -8755,6 +8385,10 @@ async function spawnPoolBackend(profile, entry) {
     }
   }
 
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    throw new Error('The SSH-only product cannot start a local profile backend.')
+  }
+
   const token = crypto.randomBytes(32).toString('base64url')
 
   // Same update mutual exclusion as the primary window's waitForLocalStart
@@ -8799,7 +8433,7 @@ async function spawnPoolBackend(profile, entry) {
         ...process.env,
         HERMES_HOME,
         ...backend.env,
-        ...orgoBackendEnv(),
+        ...(process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? {} : orgoBackendEnv()),
         // Pin the gateway's tool/terminal cwd to the same directory we chose for
         // the child process. Inherited TERMINAL_CWD (or a stale config bridge)
         // can still point at the install dir even when spawn cwd is home.
@@ -9038,22 +8672,32 @@ async function startHermes() {
 
     const setup = await runPrimaryBackendStartup({
       connectRemote,
-      ensureLocalRuntime: ensureRuntime,
-      prepareLocalBackend: async () => {
-        // Local tokens, arguments, PATH/venv probes, and runtime resolution are
-        // created only after the policy permits the local branch.
-        token = crypto.randomBytes(32).toString('base64url')
-        backendArgs = ['serve', '--host', '127.0.0.1', '--port', '0']
-        const activeProfile = readActiveDesktopProfile()
+      ensureLocalRuntime:
+        process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only'
+          ? async () => {
+              throw new Error('The SSH-only product cannot install or start a local runtime.')
+            }
+          : ensureRuntime,
+      prepareLocalBackend:
+        process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only'
+          ? async () => {
+              throw new Error('The SSH-only product cannot prepare a local runtime.')
+            }
+          : async () => {
+              // Local tokens, arguments, PATH/venv probes, and runtime resolution are
+              // created only after the policy permits the local branch.
+              token = crypto.randomBytes(32).toString('base64url')
+              backendArgs = ['serve', '--host', '127.0.0.1', '--port', '0']
+              const activeProfile = readActiveDesktopProfile()
 
-        if (activeProfile) {
-          backendArgs.unshift('--profile', activeProfile)
-        }
+              if (activeProfile) {
+                backendArgs.unshift('--profile', activeProfile)
+              }
 
-        await advanceBootProgress('backend.runtime', 'Resolving Hermes runtime', 28)
+              await advanceBootProgress('backend.runtime', 'Resolving Hermes runtime', 28)
 
-        return resolveHermesBackend(backendArgs)
-      },
+              return resolveHermesBackend(backendArgs)
+            },
       resolveRemote: () => {
         // Classify immediately before each throwing resolve. This callback runs
         // both for an already-saved remote and after first-run remote Apply.
@@ -9063,11 +8707,14 @@ async function startHermes() {
       },
       waitForDecision: waitForFirstRunSetupChoice,
       sshOnly: isSshOnlyProduct(),
-      onSshOnlyConfigurationRequired: () =>
-        promptFirstRunSetupChoice({ kind: 'bootstrap-needed', platform: process.platform, activeRoot: '' }),
+      onSshOnlyConfigurationRequired:
+        process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only'
+          ? undefined
+          : () => promptFirstRunSetupChoice({ kind: 'bootstrap-needed', platform: process.platform, activeRoot: '' }),
       // Mutual exclusion with an in-app update (#50238). Remote connections
       // return before this waiter; local starts park until the updater exits.
-      waitForLocalStart: waitForUpdateToFinish
+      waitForLocalStart:
+        process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? async () => undefined : waitForUpdateToFinish
     })
 
     if (setup.kind === 'remote') {
@@ -9101,7 +8748,7 @@ async function startHermes() {
           // can't reliably do that, so we set it inline for every spawn.
           HERMES_HOME,
           ...backend.env,
-          ...orgoBackendEnv(),
+          ...(process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? {} : orgoBackendEnv()),
           TERMINAL_CWD: hermesCwd,
           HERMES_DASHBOARD_SESSION_TOKEN: token,
           // Marks this dashboard backend as desktop-spawned so it runs the cron
@@ -10400,20 +10047,7 @@ function createWindow() {
       // Keep sticky `fallback` when we launched with --no-sandbox so the next
       // Start Menu click does not re-enter the GPU FATAL crash loop. The marker
       // records the app version so the next update re-probes the sandbox.
-      if (IS_WINDOWS) {
-        try {
-          writeSandboxMarker(
-            app.getPath('userData'),
-            markerAfterSuccessfulBoot({
-              fallbackActive: windowsSandboxFallbackSticky,
-              reason: windowsSandboxFallbackReason,
-              appVersion: app.getVersion()
-            })
-          )
-        } catch (error) {
-          rememberLog(`[sandbox] marker update after main-window reveal failed: ${error?.message || error}`)
-        }
-      }
+      windowsSandboxIntegration?.markWindowRevealed(rememberLog)
     }
   })
 
@@ -10468,41 +10102,7 @@ function createWindow() {
         mainWindow.webContents.reload()
       },
       onCrashLoopSuppressed: details => {
-        // #38216 renderer flavor (same recovery as #56726, credit @Sahil-SS9):
-        // a deterministic Windows renderer crash loop with the sandbox
-        // breakpoint signature gets one --no-sandbox relaunch instead of a
-        // dead window. Gated on the exit code so unrelated crash loops don't
-        // silently drop the sandbox.
-        if (
-          !shouldRelaunchForRendererSandboxCrashLoop({
-            reason: details?.reason,
-            exitCode: details?.exitCode,
-            alreadyNoSandbox: windowsSandboxFallbackActive || alreadyHasNoSandbox(process.argv, process.env),
-            relaunchAttempted: windowsNoSandboxRelaunchAttempted
-          })
-        ) {
-          return
-        }
-
-        windowsNoSandboxRelaunchAttempted = true
-        windowsSandboxFallbackActive = true
-        windowsSandboxFallbackSticky = true
-        windowsSandboxFallbackReason = 'renderer-crash-loop'
-
-        try {
-          writeSandboxMarker(app.getPath('userData'), fallbackMarker('renderer-crash-loop', app.getVersion()))
-        } catch {
-          void 0
-        }
-
-        rememberLog('[renderer] Windows sandbox crash loop detected; relaunching once with --no-sandbox (#38216)')
-
-        try {
-          app.relaunch({ args: buildNoSandboxRelaunchArgs(process.argv.slice(1)) })
-          app.exit(0)
-        } catch (err) {
-          rememberLog(`[renderer] --no-sandbox relaunch failed: ${err?.message || err}`)
-        }
+        windowsSandboxIntegration?.handleRendererCrashLoop(details, rememberLog)
       }
     },
     reloadWindowMs: RENDERER_RELOAD_WINDOW_MS,
@@ -10874,169 +10474,179 @@ ipcMain.handle('hermes:hud:close', async () => {
 
   return { ok: true }
 })
-ipcMain.handle('hermes:bootstrap:reset', async () => {
-  // Renderer's "Reload and retry" path. Clear the latched failure and
-  // reset connection state so the next startHermes() call restarts the
-  // full backend flow (including a fresh runBootstrap pass).
-  rememberLog('[bootstrap] reset requested by renderer; clearing latched failure')
-  await teardownPrimaryBackendAndWait()
-  bootstrapFailure = null
-  backendStartFailure = null
-  remoteReauthFailure = null
-  getFirstRunSetupGate().resetForRetry()
-  resetBootstrapSnapshot()
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.handle('hermes:bootstrap:reset', async () => {
+      // Renderer's "Reload and retry" path. Clear the latched failure and
+      // reset connection state so the next startHermes() call restarts the
+      // full backend flow (including a fresh runBootstrap pass).
+      rememberLog('[bootstrap] reset requested by renderer; clearing latched failure')
+      await teardownPrimaryBackendAndWait()
+      bootstrapFailure = null
+      backendStartFailure = null
+      remoteReauthFailure = null
+      getFirstRunSetupGate().resetForRetry()
+      resetBootstrapSnapshot()
 
-  return { ok: true }
-})
-ipcMain.handle('hermes:bootstrap:repair', async () => {
-  // Forceful repair: force the next startHermes() through the full installer
-  // (refreshing a broken/partial venv) and clear any latched failure + live
-  // connection. The renderer reloads afterwards to re-drive the boot flow.
-  //
-  // We do NOT delete the bootstrap marker here. Repair is also reachable from
-  // transient backend errors on a perfectly healthy install, and deleting the
-  // marker in that case stranded the app in first-run setup with no way back
-  // (#72166). The explicit flag carries the intent instead.
-  bootstrapRepairAttempt += 1
+      return { ok: true }
+    })
+    ipcMain.handle('hermes:bootstrap:repair', async () => {
+      // Forceful repair: force the next startHermes() through the full installer
+      // (refreshing a broken/partial venv) and clear any latched failure + live
+      // connection. The renderer reloads afterwards to re-drive the boot flow.
+      //
+      // We do NOT delete the bootstrap marker here. Repair is also reachable from
+      // transient backend errors on a perfectly healthy install, and deleting the
+      // marker in that case stranded the app in first-run setup with no way back
+      // (#72166). The explicit flag carries the intent instead.
+      bootstrapRepairAttempt += 1
 
-  // Probe the live backend process so the guard can distinguish "venv is
-  // genuinely broken" (force reinstall) from "backend is just transiently
-  // stalled under GIL pressure" (#74874 — `event loop stalled` followed by
-  // `ws ready frame send failed`, then renderer keeps reporting dead).
-  const primaryProc = backendConnectionState.getProcess()
+      // Probe the live backend process so the guard can distinguish "venv is
+      // genuinely broken" (force reinstall) from "backend is just transiently
+      // stalled under GIL pressure" (#74874 — `event loop stalled` followed by
+      // `ws ready frame send failed`, then renderer keeps reporting dead).
+      const primaryProc = backendConnectionState.getProcess()
 
-  const primaryBackendAlive = Boolean(
-    primaryProc &&
-    (primaryProc as { exitCode?: number | null }).exitCode === null &&
-    (primaryProc as { signalCode?: string | null }).signalCode === null
-  )
+      const primaryBackendAlive = Boolean(
+        primaryProc &&
+        (primaryProc as { exitCode?: number | null }).exitCode === null &&
+        (primaryProc as { signalCode?: string | null }).signalCode === null
+      )
 
-  const repairDecision = decideBootstrapRepair({
-    attempt: bootstrapRepairAttempt,
-    maxSoftAttempts: MAX_BOOTSTRAP_REPAIR_SOFT_ATTEMPTS,
-    primaryBackendAlive
+      const repairDecision = decideBootstrapRepair({
+        attempt: bootstrapRepairAttempt,
+        maxSoftAttempts: MAX_BOOTSTRAP_REPAIR_SOFT_ATTEMPTS,
+        primaryBackendAlive
+      })
+
+      rememberLog(
+        `[bootstrap] repair requested by renderer; forcing reinstall + clearing latched failure ` +
+          `(attempt=${repairDecision.attempt}/${MAX_BOOTSTRAP_REPAIR_SOFT_ATTEMPTS}, ` +
+          `primaryBackendAlive=${primaryBackendAlive}, ` +
+          `hardReinstall=${repairDecision.hardReinstall}): ${repairDecision.reason}`
+      )
+
+      // The guard may decide the install is healthy enough that a restart
+      // (without touching the venv) is the right answer. Translate that into
+      // the existing flag: if the guard said "soft restart", we skip the
+      // "bypass active runtime" path inside startHermes() and fall through
+      // to the normal restart branch, which just kills the current child
+      // and respawns it against the same venv. See #74874 — this is what
+      // breaks the infinite reinstall loop the user hit.
+      bootstrapRepairRequested = repairDecision.hardReinstall
+      bootstrapFailure = null
+      backendStartFailure = null
+      remoteReauthFailure = null
+      getFirstRunSetupGate().resetForRepair()
+      resetHermesConnection()
+
+      return { ok: true }
+    })
+    ipcMain.handle('hermes:bootstrap:continue-local', async () => {
+      rememberLog('[bootstrap] local install selected by renderer; continuing first-launch bootstrap')
+      continueFirstRunLocalBootstrap()
+
+      return { ok: true }
+    })
+    ipcMain.handle('hermes:bootstrap:cancel', async () => {
+      // Renderer's Cancel button during first-launch install. Abort the running
+      // install script (SIGTERM via the runner's abortSignal). runBootstrap
+      // resolves with { cancelled: true }, which surfaces the recovery overlay.
+      if (bootstrapAbortController) {
+        try {
+          bootstrapAbortController.abort()
+        } catch {
+          void 0
+        }
+
+        return { ok: true, cancelled: true }
+      }
+
+      return { ok: false, cancelled: false }
+    })
   })
-
-  rememberLog(
-    `[bootstrap] repair requested by renderer; forcing reinstall + clearing latched failure ` +
-      `(attempt=${repairDecision.attempt}/${MAX_BOOTSTRAP_REPAIR_SOFT_ATTEMPTS}, ` +
-      `primaryBackendAlive=${primaryBackendAlive}, ` +
-      `hardReinstall=${repairDecision.hardReinstall}): ${repairDecision.reason}`
-  )
-
-  // The guard may decide the install is healthy enough that a restart
-  // (without touching the venv) is the right answer. Translate that into
-  // the existing flag: if the guard said "soft restart", we skip the
-  // "bypass active runtime" path inside startHermes() and fall through
-  // to the normal restart branch, which just kills the current child
-  // and respawns it against the same venv. See #74874 — this is what
-  // breaks the infinite reinstall loop the user hit.
-  bootstrapRepairRequested = repairDecision.hardReinstall
-  bootstrapFailure = null
-  backendStartFailure = null
-  remoteReauthFailure = null
-  getFirstRunSetupGate().resetForRepair()
-  resetHermesConnection()
-
-  return { ok: true }
-})
-ipcMain.handle('hermes:bootstrap:continue-local', async () => {
-  rememberLog('[bootstrap] local install selected by renderer; continuing first-launch bootstrap')
-  continueFirstRunLocalBootstrap()
-
-  return { ok: true }
-})
-ipcMain.handle('hermes:bootstrap:cancel', async () => {
-  // Renderer's Cancel button during first-launch install. Abort the running
-  // install script (SIGTERM via the runner's abortSignal). runBootstrap
-  // resolves with { cancelled: true }, which surfaces the recovery overlay.
-  if (bootstrapAbortController) {
-    try {
-      bootstrapAbortController.abort()
-    } catch {
-      void 0
-    }
-
-    return { ok: true, cancelled: true }
-  }
-
-  return { ok: false, cancelled: false }
-})
+}
 ipcMain.handle('hermes:boot-progress:get', async () => bootProgressState)
-ipcMain.handle('hermes:bootstrap:get', async () => getBootstrapState())
-ipcMain.handle('hermes:orgo-desktop:config:get', async (_event, profile) => sanitizeOrgoDesktopConfig(profile))
-ipcMain.handle('hermes:orgo-desktop:config:save', async (_event, payload) => saveOrgoDesktopConfig(payload))
-ipcMain.handle('hermes:orgo-desktop:session', async (_event, profile) => createOrgoDesktopSession(profile))
-ipcMain.handle('hermes:orgo-desktop:key:save', async (_event, key) => saveOrgoApiKey(key))
-ipcMain.handle('hermes:orgo-desktop:status', async () => sanitizeOrgoDesktopConfig('default'))
-ipcMain.handle('hermes:orgo-desktop:provision', async () => provisionOrgoSharedComputer())
-ipcMain.handle('hermes:orgo-desktop:tailscale:local-status', async () => localTailscaleStatus())
-ipcMain.handle('hermes:orgo-desktop:tailscale:local-open', async () => openLocalTailscale())
-ipcMain.handle('hermes:orgo-desktop:tailscale:begin', async () => beginOrgoTailscale())
-ipcMain.handle('hermes:orgo-desktop:tailscale:status', async () => orgoTailscaleStatus())
-ipcMain.handle('hermes:orgo-desktop:tailscale:connect', async () => connectHermesThroughOrgoTailscale())
-ipcMain.handle('hermes:orgo-desktop:ensure-running', async () => {
-  const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, 'default').entry
-  const apiKey = decryptDesktopSecret(entry?.apiKey)
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.handle('hermes:bootstrap:get', async () => getBootstrapState())
+    ipcMain.handle('hermes:orgo-desktop:config:get', async (_event, profile) => sanitizeOrgoDesktopConfig(profile))
+    ipcMain.handle('hermes:orgo-desktop:config:save', async (_event, payload) => saveOrgoDesktopConfig(payload))
+    ipcMain.handle('hermes:orgo-desktop:session', async (_event, profile) => createOrgoDesktopSession(profile))
+    ipcMain.handle('hermes:orgo-desktop:key:save', async (_event, key) => saveOrgoApiKey(key))
+    ipcMain.handle('hermes:orgo-desktop:status', async () => sanitizeOrgoDesktopConfig('default'))
+    ipcMain.handle('hermes:orgo-desktop:provision', async () => provisionOrgoSharedComputer())
+    ipcMain.handle('hermes:orgo-desktop:tailscale:local-status', async () => localTailscaleStatus())
+    ipcMain.handle('hermes:orgo-desktop:tailscale:local-open', async () => openLocalTailscale())
+    ipcMain.handle('hermes:orgo-desktop:tailscale:begin', async () => beginOrgoTailscale())
+    ipcMain.handle('hermes:orgo-desktop:tailscale:status', async () => orgoTailscaleStatus())
+    ipcMain.handle('hermes:orgo-desktop:tailscale:connect', async () => connectHermesThroughOrgoTailscale())
+    ipcMain.handle('hermes:orgo-desktop:ensure-running', async () => {
+      const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, 'default').entry
+      const apiKey = decryptDesktopSecret(entry?.apiKey)
 
-  if (!entry?.computerId || !apiKey) {
-    throw new Error('Connect an Orgo computer first.')
-  }
+      if (!entry?.computerId || !apiKey) {
+        throw new Error('Connect an Orgo computer first.')
+      }
 
-  const computer = await ensureOrgoComputerRunning(apiKey, entry.computerId)
-  await ensureOrgoDesktopWallpaper(apiKey, entry.computerId, () =>
-    readBundledOrgoWallpaperBytes(APP_ROOT, process.resourcesPath)
-  ).catch(() => undefined)
+      const computer = await ensureOrgoComputerRunning(apiKey, entry.computerId)
+      await ensureOrgoDesktopWallpaper(apiKey, entry.computerId, () =>
+        readBundledOrgoWallpaperBytes(APP_ROOT, process.resourcesPath)
+      ).catch(() => undefined)
 
-  return { ok: true, computer }
-})
-ipcMain.handle('hermes:orgo-desktop:doctor', async () => {
-  const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, 'default').entry
-  const apiKey = decryptDesktopSecret(entry?.apiKey)
+      return { ok: true, computer }
+    })
+    ipcMain.handle('hermes:orgo-desktop:doctor', async () => {
+      const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, 'default').entry
+      const apiKey = decryptDesktopSecret(entry?.apiKey)
 
-  return doctorOrgoComputer(apiKey, entry?.computerId || '')
-})
-ipcMain.handle('hermes:orgo-desktop:sync', async (_event, profiles) =>
-  syncOrgoMcpToProfiles(Array.isArray(profiles) ? profiles : [])
-)
-ipcMain.handle('hermes:orgo-desktop:workspaces', async () => {
-  const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, 'default').entry
-  const apiKey = decryptDesktopSecret(entry?.apiKey)
+      return doctorOrgoComputer(apiKey, entry?.computerId || '')
+    })
+    ipcMain.handle('hermes:orgo-desktop:sync', async (_event, profiles) =>
+      syncOrgoMcpToProfiles(Array.isArray(profiles) ? profiles : [])
+    )
+    ipcMain.handle('hermes:orgo-desktop:workspaces', async () => {
+      const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, 'default').entry
+      const apiKey = decryptDesktopSecret(entry?.apiKey)
 
-  if (!apiKey) {
-    throw new Error('Enter an Orgo API key.')
-  }
+      if (!apiKey) {
+        throw new Error('Enter an Orgo API key.')
+      }
 
-  return listOrgoWorkspaces(apiKey)
-})
-ipcMain.handle('hermes:orgo-desktop:computers', async (_event, workspaceId) => {
-  const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, 'default').entry
-  const apiKey = decryptDesktopSecret(entry?.apiKey)
+      return listOrgoWorkspaces(apiKey)
+    })
+    ipcMain.handle('hermes:orgo-desktop:computers', async (_event, workspaceId) => {
+      const entry = resolveOrgoDesktopProfile(readOrgoDesktopConfig().profiles, 'default').entry
+      const apiKey = decryptDesktopSecret(entry?.apiKey)
 
-  if (!apiKey) {
-    throw new Error('Enter an Orgo API key.')
-  }
+      if (!apiKey) {
+        throw new Error('Enter an Orgo API key.')
+      }
 
-  return listOrgoComputers(apiKey, workspaceId || entry?.workspaceId)
-})
-ipcMain.handle('hermes:connectors:key:status', async () => withComposioBroker(broker => broker.keyStatus()))
-ipcMain.handle('hermes:connectors:key:save', async (_event, key) => withComposioBroker(broker => broker.saveKey(key)))
-ipcMain.handle('hermes:connectors:key:remove', async () => withComposioBroker(broker => broker.removeKey()))
-ipcMain.handle('hermes:connectors:catalog', async (_event, query) =>
-  withComposioBroker(broker => broker.listCatalog(query || {}))
-)
-ipcMain.handle('hermes:connectors:categories', async () => withComposioBroker(broker => broker.listCategories()))
-ipcMain.handle('hermes:connectors:connections', async () => withComposioBroker(broker => broker.listConnections()))
-ipcMain.handle('hermes:connectors:authorize', async (_event, slug) =>
-  withComposioBroker(broker => broker.authorize(slug))
-)
-ipcMain.handle('hermes:connectors:poll', async (_event, slug) => withComposioBroker(broker => broker.poll(slug)))
-ipcMain.handle('hermes:connectors:disconnect', async (_event, slug) =>
-  withComposioBroker(broker => broker.disconnect(slug))
-)
-ipcMain.handle('hermes:connectors:sync', async (_event, profiles) =>
-  withComposioBroker(broker => broker.syncProfiles(Array.isArray(profiles) ? profiles : []))
-)
+      return listOrgoComputers(apiKey, workspaceId || entry?.workspaceId)
+    })
+    ipcMain.handle('hermes:connectors:key:status', async () => withComposioBroker(broker => broker.keyStatus()))
+    ipcMain.handle('hermes:connectors:key:save', async (_event, key) =>
+      withComposioBroker(broker => broker.saveKey(key))
+    )
+    ipcMain.handle('hermes:connectors:key:remove', async () => withComposioBroker(broker => broker.removeKey()))
+    ipcMain.handle('hermes:connectors:catalog', async (_event, query) =>
+      withComposioBroker(broker => broker.listCatalog(query || {}))
+    )
+    ipcMain.handle('hermes:connectors:categories', async () => withComposioBroker(broker => broker.listCategories()))
+    ipcMain.handle('hermes:connectors:connections', async () => withComposioBroker(broker => broker.listConnections()))
+    ipcMain.handle('hermes:connectors:authorize', async (_event, slug) =>
+      withComposioBroker(broker => broker.authorize(slug))
+    )
+    ipcMain.handle('hermes:connectors:poll', async (_event, slug) => withComposioBroker(broker => broker.poll(slug)))
+    ipcMain.handle('hermes:connectors:disconnect', async (_event, slug) =>
+      withComposioBroker(broker => broker.disconnect(slug))
+    )
+    ipcMain.handle('hermes:connectors:sync', async (_event, profiles) =>
+      withComposioBroker(broker => broker.syncProfiles(Array.isArray(profiles) ? profiles : []))
+    )
+  })
+}
 ipcMain.handle('hermes:connection-config:get', async (_event, profile) =>
   sanitizeDesktopConnectionConfig(readDesktopConnectionConfig(), profile)
 )
@@ -11085,114 +10695,118 @@ ipcMain.handle('hermes:ssh-config:resolve', async (_event, host) => {
   })
 })
 ipcMain.handle('hermes:connection-config:test', async (_event, payload) => testDesktopConnectionConfig(payload))
-ipcMain.handle('hermes:connection-config:probe', async (_event, rawUrl) => probeRemoteAuthMode(rawUrl))
-ipcMain.handle('hermes:connection-config:oauth-login', async (_event, rawUrl) => {
-  // Capability-gated login (RFC 8252). Probe the gateway's public /api/status:
-  //   - advertises "native_pkce" in auth_flows → run the system-browser +
-  //     loopback + PKCE flow. No embedded webview, tokens held by the app
-  //     (encrypted keychain), REST/WS authenticated by bearer — no cookies.
-  //   - older gateway without native_pkce → fall back to the legacy embedded
-  //     BrowserWindow cookie flow, preserving compatibility.
-  // This is the "observable ladder + compatibility fallback tied to an
-  // identified older runtime" the desktop guide requires.
-  const baseUrl = normalizeRemoteBaseUrl(rawUrl)
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.handle('hermes:connection-config:probe', async (_event, rawUrl) => probeRemoteAuthMode(rawUrl))
+    ipcMain.handle('hermes:connection-config:oauth-login', async (_event, rawUrl) => {
+      // Capability-gated login (RFC 8252). Probe the gateway's public /api/status:
+      //   - advertises "native_pkce" in auth_flows → run the system-browser +
+      //     loopback + PKCE flow. No embedded webview, tokens held by the app
+      //     (encrypted keychain), REST/WS authenticated by bearer — no cookies.
+      //   - older gateway without native_pkce → fall back to the legacy embedded
+      //     BrowserWindow cookie flow, preserving compatibility.
+      // This is the "observable ladder + compatibility fallback tied to an
+      // identified older runtime" the desktop guide requires.
+      const baseUrl = normalizeRemoteBaseUrl(rawUrl)
 
-  let statusBody: any = null
+      let statusBody: any = null
 
-  try {
-    statusBody = await fetchPublicJson(`${baseUrl}/api/status`, { timeoutMs: 8_000 })
-  } catch {
-    // Can't read status — fall through to the embedded flow, which has its
-    // own error handling and works against any gated gateway.
-  }
+      try {
+        statusBody = await fetchPublicJson(`${baseUrl}/api/status`, { timeoutMs: 8_000 })
+      } catch {
+        // Can't read status — fall through to the embedded flow, which has its
+        // own error handling and works against any gated gateway.
+      }
 
-  const strategy = resolveLoginStrategy(statusBody)
+      const strategy = resolveLoginStrategy(statusBody)
 
-  if (strategy === 'native') {
-    try {
-      const tokens = await runNativeLogin(baseUrl, {
-        openExternal: url => shell.openExternal(url),
-        postJson: (url, body, opts) => postJsonNoAuth(url, body, opts),
-        rememberLog
-      })
+      if (strategy === 'native') {
+        try {
+          const tokens = await runNativeLogin(baseUrl, {
+            openExternal: url => shell.openExternal(url),
+            postJson: (url, body, opts) => postJsonNoAuth(url, body, opts),
+            rememberLog
+          })
 
-      _storeNativeTokens(baseUrl, tokens)
-      // Confirmed sign-in — release the reauth latch so the next
-      // startHermes() re-dials instead of replaying the stale rejection.
-      remoteReauthFailure = null
+          _storeNativeTokens(baseUrl, tokens)
+          // Confirmed sign-in — release the reauth latch so the next
+          // startHermes() re-dials instead of replaying the stale rejection.
+          remoteReauthFailure = null
 
-      return { ok: true, baseUrl, connected: true }
-    } catch (error) {
-      rememberLog(
-        `[native-oauth] native login failed (${
-          error instanceof Error ? error.message : String(error)
-        }); falling back to embedded flow`
-      )
-      // Fall through to the embedded flow so a native-flow hiccup (blocked
-      // loopback, user closed the browser) still lets the user sign in.
-    }
-  }
+          return { ok: true, baseUrl, connected: true }
+        } catch (error) {
+          rememberLog(
+            `[native-oauth] native login failed (${
+              error instanceof Error ? error.message : String(error)
+            }); falling back to embedded flow`
+          )
+          // Fall through to the embedded flow so a native-flow hiccup (blocked
+          // loopback, user closed the browser) still lets the user sign in.
+        }
+      }
 
-  // Legacy embedded-webview cookie flow.
-  await openOauthLoginWindow(baseUrl)
+      // Legacy embedded-webview cookie flow.
+      await openOauthLoginWindow(baseUrl)
 
-  const connected = await hasOauthSessionCookie(baseUrl)
+      const connected = await hasOauthSessionCookie(baseUrl)
 
-  // Only a CONFIRMED sign-in releases the latch. A cancelled/closed login
-  // window must leave it set, or the overlay's "Sign in" button starts
-  // flickering again on the next retry.
-  if (connected) {
-    remoteReauthFailure = null
-  }
+      // Only a CONFIRMED sign-in releases the latch. A cancelled/closed login
+      // window must leave it set, or the overlay's "Sign in" button starts
+      // flickering again on the next retry.
+      if (connected) {
+        remoteReauthFailure = null
+      }
 
-  return { ok: true, baseUrl, connected }
-})
-ipcMain.handle('hermes:connection-config:oauth-logout', async (_event, rawUrl) => {
-  const baseUrl = rawUrl ? normalizeRemoteBaseUrl(rawUrl) : ''
-  await clearOauthSession(baseUrl || undefined)
+      return { ok: true, baseUrl, connected }
+    })
+    ipcMain.handle('hermes:connection-config:oauth-logout', async (_event, rawUrl) => {
+      const baseUrl = rawUrl ? normalizeRemoteBaseUrl(rawUrl) : ''
+      await clearOauthSession(baseUrl || undefined)
 
-  // Also drop any native (RFC 8252) bearer tokens for this gateway so a
-  // logout clears BOTH auth shapes.
-  if (baseUrl) {
-    _clearNativeTokens(baseUrl)
-  }
+      // Also drop any native (RFC 8252) bearer tokens for this gateway so a
+      // logout clears BOTH auth shapes.
+      if (baseUrl) {
+        _clearNativeTokens(baseUrl)
+      }
 
-  // Report against the SAME liveness notion the Settings indicator uses
-  // (AT-or-RT cookie, or a native token) so a logout that left any session
-  // behind is reflected as still-connected rather than silently signed-out.
-  const connected = baseUrl ? (await hasLiveOauthSession(baseUrl)) || hasNativeSession(baseUrl) : false
+      // Report against the SAME liveness notion the Settings indicator uses
+      // (AT-or-RT cookie, or a native token) so a logout that left any session
+      // behind is reflected as still-connected rather than silently signed-out.
+      const connected = baseUrl ? (await hasLiveOauthSession(baseUrl)) || hasNativeSession(baseUrl) : false
 
-  return { ok: true, connected }
-})
+      return { ok: true, connected }
+    })
 
-// --- Hermes Cloud (cloud-auto-discovery Phase 3) ---
-// One portal login in the OAuth partition powers both discovery and the silent
-// per-agent cascade. See the discovery/cascade helpers above.
-ipcMain.handle('hermes:cloud:status', async () => ({
-  portalBaseUrl: resolvePortalBaseUrl(),
-  signedIn: await hasLivePortalSession()
-}))
-ipcMain.handle('hermes:cloud:login', async () => {
-  await openPortalLoginWindow()
+    // --- Hermes Cloud (cloud-auto-discovery Phase 3) ---
+    // One portal login in the OAuth partition powers both discovery and the silent
+    // per-agent cascade. See the discovery/cascade helpers above.
+    ipcMain.handle('hermes:cloud:status', async () => ({
+      portalBaseUrl: resolvePortalBaseUrl(),
+      signedIn: await hasLivePortalSession()
+    }))
+    ipcMain.handle('hermes:cloud:login', async () => {
+      await openPortalLoginWindow()
 
-  return { ok: true, signedIn: await hasLivePortalSession() }
-})
-ipcMain.handle('hermes:cloud:logout', async () => {
-  await clearOauthSession(resolvePortalBaseUrl())
+      return { ok: true, signedIn: await hasLivePortalSession() }
+    })
+    ipcMain.handle('hermes:cloud:logout', async () => {
+      await clearOauthSession(resolvePortalBaseUrl())
 
-  return { ok: true, signedIn: await hasLivePortalSession() }
-})
-ipcMain.handle('hermes:cloud:discover', async (_event, org) => {
-  // Returns { agents } or { needsOrgSelection: true, orgs }. `org` (optional)
-  // scopes discovery to a chosen org for multi-org users.
-  return discoverCloudAgents(typeof org === 'string' && org ? org : undefined)
-})
-ipcMain.handle('hermes:cloud:agent-sign-in', async (_event, dashboardUrl) => {
-  // Silent per-agent sign-in via the shared portal session. Returns the agent's
-  // gateway baseUrl + whether its session cookie landed; the renderer then
-  // saves a cloud-mode connection pointed at this dashboardUrl.
-  return cloudAgentSilentSignIn(dashboardUrl)
-})
+      return { ok: true, signedIn: await hasLivePortalSession() }
+    })
+    ipcMain.handle('hermes:cloud:discover', async (_event, org) => {
+      // Returns { agents } or { needsOrgSelection: true, orgs }. `org` (optional)
+      // scopes discovery to a chosen org for multi-org users.
+      return discoverCloudAgents(typeof org === 'string' && org ? org : undefined)
+    })
+    ipcMain.handle('hermes:cloud:agent-sign-in', async (_event, dashboardUrl) => {
+      // Silent per-agent sign-in via the shared portal session. Returns the agent's
+      // gateway baseUrl + whether its session cookie landed; the renderer then
+      // saves a cloud-mode connection pointed at this dashboardUrl.
+      return cloudAgentSilentSignIn(dashboardUrl)
+    })
+  })
+}
 ipcMain.handle('hermes:connection-config:save', async (_event, payload) => {
   const scope = connectionScopeKey(payload?.profile) || ''
   const previous = readDesktopConnectionConfig()
@@ -12173,7 +11787,7 @@ ipcMain.handle('hermes:setting:defaultProjectDir:pick', async () => {
   return { canceled: false, dir: result.filePaths[0] }
 })
 
-ipcMain.handle('hermes:fetchLinkTitle', (_event, url) => fetchLinkTitle(url))
+registerLinkTitleIntegration?.(ipcMain)
 
 ipcMain.handle('hermes:logs:reveal', async () => {
   try {
@@ -12742,50 +12356,54 @@ ipcMain.handle('hermes:terminal:cwd', async (_event, id) => {
 
 ipcMain.handle('hermes:terminal:dispose', (_event, id) => disposeTerminalSession(String(id || '')))
 
-ipcMain.handle('hermes:updates:check', async () =>
-  !allowsGenericHermesUpdates()
-    ? {
-        supported: false,
-        message: 'Update by pulling a reviewed Korgo Bot source release.',
-        fetchedAt: Date.now()
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.handle('hermes:updates:check', async () =>
+      !allowsGenericHermesUpdates()
+        ? {
+            supported: false,
+            message: 'Update by pulling a reviewed Korgo Bot source release.',
+            fetchedAt: Date.now()
+          }
+        : checkUpdates().catch(error => ({
+            supported: true,
+            branch: readDesktopUpdateConfig().branch,
+            error: 'check-failed',
+            message: error?.message || String(error),
+            fetchedAt: Date.now()
+          }))
+    )
+
+    ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
+      !allowsGenericHermesUpdates()
+        ? {
+            ok: false,
+            error: 'unavailable',
+            message: 'Pull a reviewed Korgo Bot source release and rerun the setup script.'
+          }
+        : applyUpdates(payload || {}).catch(error => ({
+            ok: false,
+            error: 'apply-failed',
+            message: error?.message || String(error)
+          }))
+    )
+
+    ipcMain.handle('hermes:updates:branch:get', async () =>
+      allowsGenericHermesUpdates() ? readDesktopUpdateConfig() : { branch: 'hermes-bots-release' }
+    )
+
+    ipcMain.handle('hermes:updates:branch:set', async (_event, name) => {
+      if (!allowsGenericHermesUpdates()) {
+        return { branch: 'hermes-bots-release' }
       }
-    : checkUpdates().catch(error => ({
-        supported: true,
-        branch: readDesktopUpdateConfig().branch,
-        error: 'check-failed',
-        message: error?.message || String(error),
-        fetchedAt: Date.now()
-      }))
-)
 
-ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
-  !allowsGenericHermesUpdates()
-    ? {
-        ok: false,
-        error: 'unavailable',
-        message: 'Pull a reviewed Korgo Bot source release and rerun the setup script.'
-      }
-    : applyUpdates(payload || {}).catch(error => ({
-        ok: false,
-        error: 'apply-failed',
-        message: error?.message || String(error)
-      }))
-)
+      const branch = typeof name === 'string' && name.trim() ? name.trim() : DEFAULT_UPDATE_BRANCH
+      writeDesktopUpdateConfig({ branch })
 
-ipcMain.handle('hermes:updates:branch:get', async () =>
-  allowsGenericHermesUpdates() ? readDesktopUpdateConfig() : { branch: 'hermes-bots-release' }
-)
-
-ipcMain.handle('hermes:updates:branch:set', async (_event, name) => {
-  if (!allowsGenericHermesUpdates()) {
-    return { branch: 'hermes-bots-release' }
-  }
-
-  const branch = typeof name === 'string' && name.trim() ? name.trim() : DEFAULT_UPDATE_BRANCH
-  writeDesktopUpdateConfig({ branch })
-
-  return { branch }
-})
+      return { branch }
+    })
+  })
+}
 
 // Resolve the canonical Hermes version (the one `release.py` bumps in
 // hermes_cli/__init__.py + pyproject.toml) so the desktop About panel shows the
@@ -13041,12 +12659,16 @@ async function runDesktopUninstall(mode) {
   return { ok: true, mode, willRemoveAppBundle: Boolean(removeBundle), scriptPath }
 }
 
-ipcMain.handle('hermes:uninstall:summary', async () => getUninstallSummary())
-ipcMain.handle('hermes:uninstall:run', async (_event, payload) => {
-  const mode = payload && typeof payload === 'object' ? payload.mode : payload
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.handle('hermes:uninstall:summary', async () => getUninstallSummary())
+    ipcMain.handle('hermes:uninstall:run', async (_event, payload) => {
+      const mode = payload && typeof payload === 'object' ? payload.mode : payload
 
-  return runDesktopUninstall(String(mode || ''))
-})
+      return runDesktopUninstall(String(mode || ''))
+    })
+  })
+}
 
 // Download a VS Code Marketplace extension and return the raw color-theme JSON
 // it contributes. No theme code is executed — we only read JSON from the .vsix.
@@ -13345,13 +12967,7 @@ app.on('before-quit', event => {
   // FATAL GPU aborts skip before-quit, leaving the `booting` marker in place.
   // Keyed on sticky (not active): a manual --no-sandbox run still records a
   // clean quit, while an engaged fallback keeps its sticky marker.
-  if (IS_WINDOWS && !windowsSandboxFallbackSticky) {
-    try {
-      writeSandboxMarker(app.getPath('userData'), markerAfterSuccessfulBoot({ fallbackActive: false }))
-    } catch {
-      void 0
-    }
-  }
+  windowsSandboxIntegration?.markCleanQuit()
 
   // The always-on-top overlay isn't a "real" app window; close it so a stray
   // pet can't keep the process alive or float over a quit app.

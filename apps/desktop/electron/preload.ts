@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
+import { createSkuPreloadBridge } from './sku-integrations.preload'
+
 contextBridge.exposeInMainWorld('hermesDesktop', {
   getConnection: profile => ipcRenderer.invoke('hermes:connection', profile),
   revalidateConnection: () => ipcRenderer.invoke('hermes:connection:revalidate'),
@@ -118,54 +120,12 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
     }
   },
   getBootProgress: () => ipcRenderer.invoke('hermes:boot-progress:get'),
-      orgoDesktop: {
-        getConfig: profile => ipcRenderer.invoke('hermes:orgo-desktop:config:get', profile),
-        saveConfig: payload => ipcRenderer.invoke('hermes:orgo-desktop:config:save', payload),
-        getSession: profile => ipcRenderer.invoke('hermes:orgo-desktop:session', profile),
-        saveKey: key => ipcRenderer.invoke('hermes:orgo-desktop:key:save', key),
-        status: () => ipcRenderer.invoke('hermes:orgo-desktop:status'),
-        provision: () => ipcRenderer.invoke('hermes:orgo-desktop:provision'),
-        ensureRunning: () => ipcRenderer.invoke('hermes:orgo-desktop:ensure-running'),
-        doctor: () => ipcRenderer.invoke('hermes:orgo-desktop:doctor'),
-        syncProfiles: profiles => ipcRenderer.invoke('hermes:orgo-desktop:sync', profiles),
-        listWorkspaces: () => ipcRenderer.invoke('hermes:orgo-desktop:workspaces'),
-        listComputers: workspaceId => ipcRenderer.invoke('hermes:orgo-desktop:computers', workspaceId),
-        tailscaleLocalStatus: () => ipcRenderer.invoke('hermes:orgo-desktop:tailscale:local-status'),
-        openTailscale: () => ipcRenderer.invoke('hermes:orgo-desktop:tailscale:local-open'),
-        beginTailscale: () => ipcRenderer.invoke('hermes:orgo-desktop:tailscale:begin'),
-        tailscaleStatus: () => ipcRenderer.invoke('hermes:orgo-desktop:tailscale:status'),
-        connectRemoteHermes: () => ipcRenderer.invoke('hermes:orgo-desktop:tailscale:connect')
-      },
-  connectors: {
-    keyStatus: () => ipcRenderer.invoke('hermes:connectors:key:status'),
-    saveKey: key => ipcRenderer.invoke('hermes:connectors:key:save', key),
-    removeKey: () => ipcRenderer.invoke('hermes:connectors:key:remove'),
-    catalog: query => ipcRenderer.invoke('hermes:connectors:catalog', query),
-    categories: () => ipcRenderer.invoke('hermes:connectors:categories'),
-    connections: () => ipcRenderer.invoke('hermes:connectors:connections'),
-    authorize: slug => ipcRenderer.invoke('hermes:connectors:authorize', slug),
-    poll: slug => ipcRenderer.invoke('hermes:connectors:poll', slug),
-    disconnect: slug => ipcRenderer.invoke('hermes:connectors:disconnect', slug),
-    syncProfiles: profiles => ipcRenderer.invoke('hermes:connectors:sync', profiles)
-  },
   getConnectionConfig: profile => ipcRenderer.invoke('hermes:connection-config:get', profile),
   saveConnectionConfig: payload => ipcRenderer.invoke('hermes:connection-config:save', payload),
   applyConnectionConfig: payload => ipcRenderer.invoke('hermes:connection-config:apply', payload),
   testConnectionConfig: payload => ipcRenderer.invoke('hermes:connection-config:test', payload),
   sshConfigHosts: () => ipcRenderer.invoke('hermes:ssh-config:hosts'),
   sshResolveHost: host => ipcRenderer.invoke('hermes:ssh-config:resolve', host),
-  probeConnectionConfig: remoteUrl => ipcRenderer.invoke('hermes:connection-config:probe', remoteUrl),
-  oauthLoginConnectionConfig: remoteUrl => ipcRenderer.invoke('hermes:connection-config:oauth-login', remoteUrl),
-  oauthLogoutConnectionConfig: remoteUrl => ipcRenderer.invoke('hermes:connection-config:oauth-logout', remoteUrl),
-  // Hermes Cloud: one portal login powers discovery + silent per-agent sign-in
-  // (cloud-auto-discovery Phase 3).
-  cloud: {
-    status: () => ipcRenderer.invoke('hermes:cloud:status'),
-    login: () => ipcRenderer.invoke('hermes:cloud:login'),
-    logout: () => ipcRenderer.invoke('hermes:cloud:logout'),
-    discover: org => ipcRenderer.invoke('hermes:cloud:discover', org),
-    agentSignIn: dashboardUrl => ipcRenderer.invoke('hermes:cloud:agent-sign-in', dashboardUrl)
-  },
   profile: {
     get: () => ipcRenderer.invoke('hermes:profile:get'),
     set: name => ipcRenderer.invoke('hermes:profile:set', name)
@@ -207,7 +167,6 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   setPreviewShortcutActive: active => ipcRenderer.send('hermes:previewShortcutActive', Boolean(active)),
   openExternal: url => ipcRenderer.invoke('hermes:openExternal', url),
   openPreviewInBrowser: url => ipcRenderer.invoke('hermes:openPreviewInBrowser', url),
-  fetchLinkTitle: url => ipcRenderer.invoke('hermes:fetchLinkTitle', url),
   sanitizeWorkspaceCwd: cwd => ipcRenderer.invoke('hermes:workspace:sanitize', cwd),
   settings: {
     getDefaultProjectDir: () => ipcRenderer.invoke('hermes:setting:defaultProjectDir:get'),
@@ -303,12 +262,6 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
 
     return () => ipcRenderer.removeListener('hermes:open-folder-requested', listener)
   },
-  onOpenUpdatesRequested: callback => {
-    const listener = () => callback()
-    ipcRenderer.on('hermes:open-updates', listener)
-
-    return () => ipcRenderer.removeListener('hermes:open-updates', listener)
-  },
   onDeepLink: callback => {
     const listener = (_event, payload) => callback(payload)
     ipcRenderer.on('hermes:deep-link', listener)
@@ -374,40 +327,8 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
 
     return () => ipcRenderer.removeListener('hermes:boot-progress', listener)
   },
-  // First-launch bootstrap progress -- emitted by the install.ps1 stage
-  // runner in main.ts (apps/desktop/electron/bootstrap-runner.ts).
-  // Renderer's install overlay subscribes to live events and queries the
-  // current snapshot via getBootstrapState() to recover after a devtools
-  // reload mid-bootstrap.
-  getBootstrapState: () => ipcRenderer.invoke('hermes:bootstrap:get'),
-  continueBootstrapLocal: () => ipcRenderer.invoke('hermes:bootstrap:continue-local'),
-  resetBootstrap: () => ipcRenderer.invoke('hermes:bootstrap:reset'),
-  repairBootstrap: () => ipcRenderer.invoke('hermes:bootstrap:repair'),
-  cancelBootstrap: () => ipcRenderer.invoke('hermes:bootstrap:cancel'),
-  onBootstrapEvent: callback => {
-    const listener = (_event, payload) => callback(payload)
-    ipcRenderer.on('hermes:bootstrap:event', listener)
-
-    return () => ipcRenderer.removeListener('hermes:bootstrap:event', listener)
-  },
   getVersion: () => ipcRenderer.invoke('hermes:version'),
-  getRemoteDisplayReason: () => ipcRenderer.invoke('hermes:get-remote-display-reason'),
-  uninstall: {
-    summary: () => ipcRenderer.invoke('hermes:uninstall:summary'),
-    run: mode => ipcRenderer.invoke('hermes:uninstall:run', { mode })
-  },
-  updates: {
-    check: () => ipcRenderer.invoke('hermes:updates:check'),
-    apply: opts => ipcRenderer.invoke('hermes:updates:apply', opts),
-    getBranch: () => ipcRenderer.invoke('hermes:updates:branch:get'),
-    setBranch: name => ipcRenderer.invoke('hermes:updates:branch:set', name),
-    onProgress: callback => {
-      const listener = (_event, payload) => callback(payload)
-      ipcRenderer.on('hermes:updates:progress', listener)
-
-      return () => ipcRenderer.removeListener('hermes:updates:progress', listener)
-    }
-  },
+  ...createSkuPreloadBridge(ipcRenderer),
   themes: {
     fetchMarketplace: id => ipcRenderer.invoke('hermes:vscode-theme:fetch', id),
     searchMarketplace: query => ipcRenderer.invoke('hermes:vscode-theme:search', query)
