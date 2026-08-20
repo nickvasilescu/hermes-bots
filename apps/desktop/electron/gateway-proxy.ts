@@ -1,5 +1,7 @@
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 
+import { assertSshOnlyGatewayProxyDataAllowed } from './ssh-gateway-policy'
+
 const EVENT_CHANNEL = 'hermes:gateway-proxy:event'
 const START_CHANNEL = 'hermes:gateway-proxy:start'
 const SEND_CHANNEL = 'hermes:gateway-proxy:send'
@@ -32,6 +34,7 @@ interface SocketLike {
 
 interface ProxyEntry {
   owner: WebContents
+  purpose: GatewayProxyPurpose
   socket: SocketLike
   messageChain: Promise<void>
 }
@@ -40,18 +43,24 @@ export interface GatewayProxyOptions {
   createSocket?: (url: string) => SocketLike
   ipc: IpcRegistrar
   resolveUrl: (profile: null | string) => Promise<string>
+  sshOnly?: boolean
 }
 
 function normalizedProfile(profile: unknown): null | string {
-  if (profile === null || profile === undefined || profile === '') return null
+  if (profile === null || profile === undefined || profile === '') {
+    return null
+  }
+
   if (typeof profile !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(profile)) {
     throw new Error('Invalid gateway proxy profile.')
   }
+
   return profile
 }
 
 function targetUrl(rawUrl: string, request: GatewayProxyRequest): string {
   const url = new URL(rawUrl)
+
   if (
     (url.protocol !== 'ws:' && url.protocol !== 'wss:') ||
     url.username ||
@@ -61,21 +70,29 @@ function targetUrl(rawUrl: string, request: GatewayProxyRequest): string {
     throw new Error('Native gateway resolver returned an invalid endpoint.')
   }
 
-  if (request.purpose === 'gateway') return url.toString()
+  if (request.purpose === 'gateway') {
+    return url.toString()
+  }
 
   if (request.purpose === 'voice') {
-    if (request.path !== '/api/audio/speak-stream') throw new Error('Invalid voice proxy endpoint.')
+    if (request.path !== '/api/audio/speak-stream') {
+      throw new Error('Invalid voice proxy endpoint.')
+    }
+
     url.pathname = url.pathname.replace(/\/api\/ws$/, request.path)
   } else {
     const path = String(request.path || '')
     const rawPathname = path.split('?')[0]
     let decodedPathname = ''
+
     try {
       decodedPathname = decodeURIComponent(rawPathname)
     } catch {
       throw new Error('Invalid plugin proxy endpoint.')
     }
+
     const segments = decodedPathname.split('/')
+
     const invalidPath =
       path.includes('#') ||
       /[\s\\]/.test(path) ||
@@ -86,28 +103,45 @@ function targetUrl(rawUrl: string, request: GatewayProxyRequest): string {
       !/^[a-zA-Z0-9._~-]+$/.test(segments[3] || '') ||
       segments.length < 5 ||
       segments.slice(4).some(segment => segment === '.' || segment === '..')
+
     if (invalidPath) {
       throw new Error('Invalid plugin proxy endpoint.')
     }
+
     const requested = new URL(path, 'http://gateway.invalid')
+
     for (const name of requested.searchParams.keys()) {
       if (/^(?:access_token|authorization|profile|ticket|token)$/i.test(name)) {
         throw new Error('Invalid plugin proxy endpoint.')
       }
     }
+
     url.pathname = url.pathname.replace(/\/api\/ws$/, requested.pathname)
     requested.searchParams.forEach((value, name) => url.searchParams.set(name, value))
   }
 
   const profile = normalizedProfile(request.profile)
-  if (profile) url.searchParams.set('profile', profile)
+
+  if (profile) {
+    url.searchParams.set('profile', profile)
+  }
+
   return url.toString()
 }
 
 async function transferableData(data: unknown): Promise<unknown> {
-  if (typeof data === 'string' || data instanceof ArrayBuffer || data instanceof Uint8Array) return data
-  if (typeof Blob !== 'undefined' && data instanceof Blob) return data.arrayBuffer()
-  if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+  if (typeof data === 'string' || data instanceof ArrayBuffer || data instanceof Uint8Array) {
+    return data
+  }
+
+  if (typeof Blob !== 'undefined' && data instanceof Blob) {
+    return data.arrayBuffer()
+  }
+
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+  }
+
   return String(data)
 }
 
@@ -115,13 +149,22 @@ export function registerGatewayProxy(options: GatewayProxyOptions): { disposeOwn
   const entries = new Map<string, ProxyEntry>()
   const createSocket = options.createSocket ?? (url => new WebSocket(url) as unknown as SocketLike)
   const entryKey = (owner: WebContents, id: string) => `${owner.id}:${id}`
+
   const emit = (entry: ProxyEntry, payload: Record<string, unknown>) => {
-    if (!entry.owner.isDestroyed()) entry.owner.send(EVENT_CHANNEL, payload)
+    if (!entry.owner.isDestroyed()) {
+      entry.owner.send(EVENT_CHANNEL, payload)
+    }
   }
+
   const closeEntry = (key: string, code = 1000, reason = 'closed') => {
     const entry = entries.get(key)
-    if (!entry) return
+
+    if (!entry) {
+      return
+    }
+
     entries.delete(key)
+
     try {
       entry.socket.close(code, reason)
     } catch {
@@ -131,36 +174,65 @@ export function registerGatewayProxy(options: GatewayProxyOptions): { disposeOwn
 
   options.ipc.handle(START_CHANNEL, async (event, rawRequest) => {
     const request = rawRequest as GatewayProxyRequest
-    if (!request || !ID_RE.test(String(request.id || ''))) throw new Error('Invalid gateway proxy id.')
-    if (!['gateway', 'plugin', 'voice'].includes(request.purpose)) throw new Error('Invalid gateway proxy purpose.')
+
+    if (!request || !ID_RE.test(String(request.id || ''))) {
+      throw new Error('Invalid gateway proxy id.')
+    }
+
+    if (!['gateway', 'plugin', 'voice'].includes(request.purpose)) {
+      throw new Error('Invalid gateway proxy purpose.')
+    }
+
+    if (options.sshOnly && request.purpose === 'plugin') {
+      throw new Error('Plugin proxy is unavailable in SSH-only.')
+    }
+
+    if (options.sshOnly && request.purpose === 'gateway' && request.path) {
+      throw new Error('Custom gateway proxy paths are unavailable in SSH-only.')
+    }
+
     const key = entryKey(event.sender, request.id)
-    if (entries.has(key)) throw new Error('Gateway proxy id is already active.')
+
+    if (entries.has(key)) {
+      throw new Error('Gateway proxy id is already active.')
+    }
 
     const ownerCount = [...entries.values()].filter(entry => entry.owner === event.sender).length
-    if (ownerCount >= MAX_SOCKETS_PER_RENDERER) throw new Error('Gateway proxy socket limit reached.')
+
+    if (ownerCount >= MAX_SOCKETS_PER_RENDERER) {
+      throw new Error('Gateway proxy socket limit reached.')
+    }
 
     const profile = normalizedProfile(request.profile)
     const url = targetUrl(await options.resolveUrl(profile), { ...request, profile })
     let socket: SocketLike
+
     try {
       socket = createSocket(url)
     } catch {
       throw new Error('Gateway proxy could not open socket.')
     }
+
     socket.binaryType = 'arraybuffer'
-    const entry: ProxyEntry = { owner: event.sender, socket, messageChain: Promise.resolve() }
+    const entry: ProxyEntry = { owner: event.sender, purpose: request.purpose, socket, messageChain: Promise.resolve() }
     entries.set(key, entry)
 
     socket.addEventListener('open', () => emit(entry, { id: request.id, type: 'open' }))
     socket.addEventListener('message', message => {
       entry.messageChain = entry.messageChain.then(async () => {
-        if (entries.get(key) !== entry) return
+        if (entries.get(key) !== entry) {
+          return
+        }
+
         emit(entry, { data: await transferableData(message.data), id: request.id, type: 'message' })
       })
     })
     socket.addEventListener('error', () => emit(entry, { id: request.id, type: 'error' }))
     socket.addEventListener('close', closeEvent => {
-      if (entries.get(key) === entry) entries.delete(key)
+      if (entries.get(key) === entry) {
+        entries.delete(key)
+      }
+
       emit(entry, {
         code: Number(closeEvent.code) || 1000,
         id: request.id,
@@ -178,12 +250,29 @@ export function registerGatewayProxy(options: GatewayProxyOptions): { disposeOwn
     const id = String(raw?.id || '')
     const key = entryKey(event.sender, id)
     const entry = entries.get(key)
-    if (!entry) return
+
+    if (!entry) {
+      return
+    }
+
+    if (options.sshOnly) {
+      try {
+        assertSshOnlyGatewayProxyDataAllowed(entry.purpose, raw?.data)
+      } catch {
+        emit(entry, { id, type: 'error' })
+        closeEntry(key, 1008, 'gateway operation denied')
+
+        return
+      }
+    }
+
     if (entry.socket.bufferedAmount > MAX_BUFFERED_BYTES) {
       emit(entry, { id, type: 'error' })
       closeEntry(key, 1009, 'proxy backpressure limit')
+
       return
     }
+
     entry.socket.send(raw?.data)
   })
 
@@ -195,7 +284,9 @@ export function registerGatewayProxy(options: GatewayProxyOptions): { disposeOwn
   return {
     disposeOwner(owner) {
       for (const [id, entry] of entries) {
-        if (entry.owner === owner) closeEntry(id, 1001, 'renderer destroyed')
+        if (entry.owner === owner) {
+          closeEntry(id, 1001, 'renderer destroyed')
+        }
       }
     }
   }

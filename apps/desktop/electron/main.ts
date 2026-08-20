@@ -252,6 +252,7 @@ import {
 import { registerSkuIntegrations } from './sku-integrations'
 import { windowsSandboxIntegration } from './sku-integrations.windows-sandbox'
 import { ensureSpawnHelperExecutable } from './spawn-helper-perms'
+import { assertSshOnlyApiRequestAllowed } from './ssh-api-policy'
 import { createBootstrapCoordinator, sshConfigFingerprint } from './ssh-bootstrap-coordinator'
 import { collectSshConfigHosts, parseSshGOutput } from './ssh-config'
 import {
@@ -261,6 +262,10 @@ import {
   redactSecrets,
   SshConnection
 } from './ssh-connection'
+import {
+  coerceSshOnlyDesktopConnectionConfig,
+  sanitizeSshOnlyDesktopConnectionConfig
+} from './ssh-connection-config-policy'
 import { SSH_ONLY_HOST_KEY_POLICY, SSH_ONLY_IDENTITY_PATH } from './ssh-only-policy'
 import { createStreamThrottle } from './stream-throttle'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
@@ -352,7 +357,8 @@ const ipcMain = createAuthorizedIpc({
 
 const gatewayProxy = registerGatewayProxy({
   ipc: ipcMain,
-  resolveUrl: profile => freshGatewayWsUrl(profile)
+  resolveUrl: profile => freshGatewayWsUrl(profile),
+  sshOnly: isSshOnlyProduct()
 })
 
 // Preload must be plain JS — Electron's sandbox can't run .ts, and tsx's
@@ -7143,6 +7149,10 @@ function writeActiveDesktopProfile(name) {
 // behavior); with a `profile` it describes that profile's per-profile remote
 // override (or an empty "local/inherit" view when the profile has none).
 async function sanitizeDesktopConnectionConfig(config = readDesktopConnectionConfig(), profile = null) {
+  if (isSshOnlyProduct()) {
+    return sanitizeSshOnlyDesktopConnectionConfig(config, profile)
+  }
+
   const key = connectionScopeKey(profile)
   const scoped = key ? config.profiles?.[key] || null : null
   const block = key ? scoped || {} : config.remote || {}
@@ -7248,6 +7258,11 @@ function buildRemoteBlock(remoteUrl, authMode, token, org?: string) {
 
 function coerceDesktopConnectionConfig(input: any = {}, existing = readDesktopConnectionConfig(), options: any = {}) {
   assertDesktopConnectionMode(String(input.mode || 'local'))
+
+  if (isSshOnlyProduct()) {
+    return coerceSshOnlyDesktopConnectionConfig(input, existing, buildSshBlock)
+  }
+
   const persistToken = options.persistToken !== false
   const key = connectionScopeKey(input.profile)
   // 'cloud' and 'remote' both persist a remote-shaped block; 'cloud' is
@@ -11340,6 +11355,10 @@ async function mergeRemoteProfileSessions(searchParams, remoteProfiles) {
 }
 
 ipcMain.handle('hermes:api', async (_event, request) => {
+  if (isSshOnlyProduct()) {
+    assertSshOnlyApiRequestAllowed(request)
+  }
+
   // Remote-profile session requests would otherwise hit the local primary off
   // each profile's on-disk state.db — fine for local profiles, but a remote
   // profile's sessions live on its remote host, so the UI's IDs 404 (or mutations
