@@ -1,3 +1,10 @@
+import {
+  COMMAND_CENTER_SECTIONS,
+  type CommandCenterSystemAction,
+  CommandCenterSystemActions,
+  MaintenancePanel,
+  startCommandCenterSystemAction
+} from '@desktop/command-center-surface'
 import { type MouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { LogTail } from '@/components/chat/log-tail'
@@ -7,7 +14,7 @@ import { SearchField } from '@/components/ui/search-field'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ResponsiveTabs } from '@/components/ui/tab-dropdown'
 import { Tip } from '@/components/ui/tooltip'
-import { getActionStatus, getLogs, getStatus, getUsageAnalytics, restartGateway, updateHermes } from '@/hermes'
+import { getActionStatus, getLogs, getStatus, getUsageAnalytics } from '@/hermes'
 import type { ActionStatusResponse, AnalyticsResponse, StatusResponse } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { sessionTitle } from '@/lib/chat-runtime'
@@ -36,11 +43,9 @@ import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { OverlayMain, OverlayNav, OverlaySplitLayout } from '../overlays/overlay-split-layout'
 import { OverlayView } from '../overlays/overlay-view'
 
-import { MaintenancePanel } from './maintenance'
-
 export type CommandCenterSection = 'maintenance' | 'sessions' | 'system' | 'usage'
 
-const SECTIONS = ['sessions', 'system', 'usage', 'maintenance'] as const satisfies readonly CommandCenterSection[]
+const SECTIONS = COMMAND_CENTER_SECTIONS satisfies readonly CommandCenterSection[]
 
 const LOG_FILES = ['agent', 'errors', 'gateway', 'desktop'] as const
 const LOG_LEVELS = ['ALL', 'INFO', 'WARNING', 'ERROR'] as const
@@ -262,11 +267,11 @@ export function CommandCenterView({ initialSection, onClose, onDeleteSession, on
   }, [logQuery, logs])
 
   const runSystemAction = useCallback(
-    async (kind: 'restart' | 'update') => {
+    async (kind: CommandCenterSystemAction) => {
       setSystemError('')
 
       try {
-        const started = kind === 'restart' ? await restartGateway() : await updateHermes()
+        const started = await startCommandCenterSystemAction(kind)
         let nextStatus: ActionStatusResponse | null = null
 
         for (let attempt = 0; attempt < 18; attempt += 1) {
@@ -440,12 +445,7 @@ export function CommandCenterView({ initialSection, onClose, onDeleteSession, on
                         </div>
                       </div>
                       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap max-[47.5rem]:whitespace-normal">
-                        <Button onClick={() => void runSystemAction('restart')} size="xs" variant="text">
-                          {cc.restartGateway}
-                        </Button>
-                        <Button onClick={() => void runSystemAction('update')} size="xs" variant="textStrong">
-                          {cc.updateHermes}
-                        </Button>
+                        <CommandCenterSystemActions copy={cc} onRun={kind => void runSystemAction(kind)} />
                       </div>
                     </div>
                     {systemAction && (

@@ -1,4 +1,22 @@
 import { ComposerPrimitive } from '@assistant-ui/react'
+import { ContextMenu } from '@desktop/composer-context-menu'
+import { ComposerControls } from '@desktop/composer-controls'
+import {
+  handleSkuComposerPaste,
+  shouldInterceptSkuTypedVoiceStop,
+  SkuAttachmentList,
+  SkuCodingStatusRow,
+  SkuComposerActionContributions,
+  SkuComposerLeadingContributions,
+  SkuVoiceActivity,
+  SkuVoicePlaybackActivity,
+  useSkuAutoSpeakReplies,
+  useSkuComposerBranch,
+  useSkuComposerDrop,
+  useSkuComposerImageRequests,
+  useSkuComposerVoice
+} from '@desktop/composer-runtime'
+import { ComposerStatusStack } from '@desktop/composer-status-stack'
 import { useStore } from '@nanostores/react'
 import { type ClipboardEvent, type FormEvent, type KeyboardEvent, useCallback, useEffect, useMemo, useRef } from 'react'
 
@@ -8,42 +26,32 @@ import { Button } from '@/components/ui/button'
 import { Slot as ContribSlot } from '@/contrib/react/slot'
 import { useI18n } from '@/i18n'
 import { chatMessageText } from '@/lib/chat-messages'
-import { PR_COMMENT_URL_RE } from '@/lib/chat-runtime'
 import { sanitizeComposerInput } from '@/lib/composer-input-sanitize'
-import { DATA_IMAGE_URL_RE } from '@/lib/embedded-images'
 import { triggerHaptic } from '@/lib/haptics'
 import { cn } from '@/lib/utils'
-import { interceptsTypedVoiceStop } from '@/lib/voice-stop-word'
 import { sessionCompacting } from '@/store/compaction'
 import { browseBackward, browseForward, deriveUserHistory, isBrowsingHistory } from '@/store/composer-input-history'
 import { POPOUT_WIDTH_REM } from '@/store/composer-popout'
 import { parkQueuedPrompts, removeQueuedPrompt, unparkQueuedPrompts } from '@/store/composer-queue'
 import { $hudMode } from '@/store/hud'
 import { sessionBlockingPrompt } from '@/store/prompts'
-import { toggleReview } from '@/store/review'
 import { $gatewayState } from '@/store/session'
 import { $threadScrolledUp } from '@/store/thread-scroll'
-import { $autoSpeakReplies } from '@/store/voice-prefs'
 import { useTheme } from '@/themes'
 
-import { AttachmentList } from './attachments'
 import {
   acceptsTriggerCompletion,
   COMPOSER_FADE_BACKGROUND,
   type QueueEditState,
   slashArgStage
 } from './composer-utils'
-import { ContextMenu } from './context-menu'
 import { COMPOSER_AREAS, runComposerMiddleware } from './contrib'
-import { ComposerControls } from './controls'
 import { ComposerDirectiveActions } from './directive-actions'
 import { COMPOSER_DROP_ACTIVE_CLASS, COMPOSER_DROP_FADE_CLASS } from './drop-affordance'
-import { markActiveComposer, onComposerAttachImagesRequest } from './focus'
+import { markActiveComposer } from './focus'
 import { HelpHint } from './help-hint'
 import { useAtCompletions } from './hooks/use-at-completions'
-import { useComposerBranch } from './hooks/use-composer-branch'
 import { useComposerDraft } from './hooks/use-composer-draft'
-import { useComposerDrop } from './hooks/use-composer-drop'
 import { useComposerEscCancel } from './hooks/use-composer-esc-cancel'
 import { useComposerMetrics } from './hooks/use-composer-metrics'
 import { useComposerPlaceholder } from './hooks/use-composer-placeholder'
@@ -53,7 +61,6 @@ import { useComposerSubmit } from './hooks/use-composer-submit'
 import { useComposerTrigger } from './hooks/use-composer-trigger'
 import { useComposerUndo } from './hooks/use-composer-undo'
 import { useComposerUrlDialog } from './hooks/use-composer-url-dialog'
-import { useComposerVoice } from './hooks/use-composer-voice'
 import { useEmojiCompletions } from './hooks/use-emoji-completions'
 import { useComposerMicroActions } from './hooks/use-micro-actions'
 import { useSlashCompletions } from './hooks/use-slash-completions'
@@ -71,16 +78,13 @@ import {
   RICH_INPUT_SLOT
 } from './rich-editor'
 import { useComposerScope } from './scope'
-import { ComposerStatusStack } from './status-stack'
-import { CodingStatusRow } from './status-stack/coding-row'
 import { SuggestionPills } from './suggestion-pills'
-import { extractClipboardImageBlobs, openDirectiveScope } from './text-utils'
+import { openDirectiveScope } from './text-utils'
 import { ComposerTriggerPopover } from './trigger-popover'
 import type { ChatBarProps } from './types'
 import { isRedoShortcut, isUndoShortcut } from './undo-history'
 import { UrlDialog } from './url-dialog'
 import { chipTypedUrlOnSpace, linkifyUrls } from './url-refs'
-import { VoiceActivity, VoicePlaybackActivity } from './voice-activity'
 
 export function ChatBar({
   busy,
@@ -127,7 +131,7 @@ export function ChatBar({
       // Outside a voice conversation, typed "stop" is a normal message.
       const voiceStop = voiceStopRef.current
 
-      if (interceptsTypedVoiceStop(voiceStop.active, value, options?.attachments?.length ?? 0)) {
+      if (shouldInterceptSkuTypedVoiceStop(voiceStop.active, value, options?.attachments?.length ?? 0)) {
         voiceStop.end()
 
         // Consumed (not rejected): report accepted so the submit engine
@@ -152,7 +156,7 @@ export function ChatBar({
   const attachments = useStore(scope.attachments.$attachments)
   const compacting = useStore(useMemo(() => sessionCompacting(sessionId ?? null), [sessionId]))
   const scrolledUp = useStore($threadScrolledUp)
-  const autoSpeak = useStore($autoSpeakReplies)
+  const autoSpeak = useSkuAutoSpeakReplies()
   // The turn is parked on the user (clarify / approval / sudo / secret). Esc must
   // not interrupt it — there's nothing actively running to stop, and stopping
   // would discard a question the user may want to come back to. The blocking
@@ -241,26 +245,10 @@ export function ChatBar({
     syncDraftFromEditor
   })
 
-  // Paste-to-focus: clipboard images from an unfocused ⌘V ride the bus (the
-  // window dispatcher has no handle on this composer's attachment scope).
-  // Same ingestion as a focused paste's image branch.
-  useEffect(() => {
-    if (!onAttachImageBlob) {
-      return undefined
-    }
-
-    return onComposerAttachImagesRequest(({ blobs, target }) => {
-      if (target !== scope.target) {
-        return
-      }
-
-      triggerHaptic('selection')
-
-      for (const blob of blobs) {
-        void onAttachImageBlob(blob)
-      }
-    })
-  }, [onAttachImageBlob, scope.target])
+  // Full builds subscribe to the global paste-to-focus image bus. The SSH
+  // composer resolves this hook to a no-op module, so no image attachment
+  // listener is ever installed there.
+  useSkuComposerImageRequests({ onAttachImageBlob, target: scope.target })
 
   // Prior history belongs to the draft that just left — undoing into another
   // conversation's text is worse than having none.
@@ -482,56 +470,24 @@ export function ChatBar({
   }
 
   const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
-    const imageBlobs = extractClipboardImageBlobs(event.clipboardData)
-
-    if (imageBlobs.length > 0 && onAttachImageBlob) {
-      triggerHaptic('selection')
-
-      for (const blob of imageBlobs) {
-        void onAttachImageBlob(blob)
-      }
-    }
-
     // Trim surrounding whitespace so a copy that dragged along leading/trailing
     // blank lines (common when selecting from terminals, code blocks, web pages)
     // doesn't dump multiline padding into the composer. Internal newlines are
     // preserved — only the edges are cleaned up.
     const pastedText = sanitizeComposerInput(event.clipboardData.getData('text').trim())
 
-    if (!pastedText) {
-      event.preventDefault()
-
-      if (imageBlobs.length > 0) {
-        return
-      }
-
-      // Under WSL2/WSLg the Windows host clipboard doesn't bridge *images* to
-      // the Linux clipboard the DOM paste event reads, so a host screenshot
-      // arrives as an empty paste (no blobs, no text). Fall back to the main
-      // process, which pulls the image straight off the Windows clipboard.
-      // Silent so a genuinely-empty paste doesn't pop a "no image" warning.
-      if (onPasteClipboardImage) {
-        triggerHaptic('selection')
-        void onPasteClipboardImage({ silent: true })
-      }
-
-      return
-    }
-
-    if (DATA_IMAGE_URL_RE.test(pastedText)) {
-      event.preventDefault()
-
-      return
-    }
-
-    // A pasted GitHub PR-comment deep link resolves to a structured review
-    // attachment (author, body, file:line anchor, diff hunk) instead of a bare
-    // `@url:` chip. Optimistic card first, resolve via gh in the background —
-    // if gh can't answer (offline, unauthenticated, foreign repo) the card
-    // swaps back to the plain URL ref so nothing is lost.
-    if (PR_COMMENT_URL_RE.test(pastedText) && onAttachPrCommentUrl?.(pastedText)) {
-      event.preventDefault()
-
+    // Attachment/image/PR-comment interception is selected at build time. SSH
+    // resolves this seam to text-only paste handling and never calls a host
+    // attachment callback; full builds retain the prior image/attachment flow.
+    if (
+      handleSkuComposerPaste({
+        event,
+        onAttachImageBlob,
+        onAttachPrCommentUrl,
+        onPasteClipboardImage,
+        pastedText
+      })
+    ) {
       return
     }
 
@@ -907,12 +863,12 @@ export function ChatBar({
     handleDrop,
     handleInputDragOver,
     handleInputDrop
-  } = useComposerDrop({ cwd, insertInlineRefs, onAttachDroppedItems, requestMainFocus })
+  } = useSkuComposerDrop({ cwd, insertInlineRefs, onAttachDroppedItems, requestMainFocus })
 
   // Branch / worktree hand-offs (CodingStatusRow). Owns the worktree open +
   // branch-off/convert/list/switch actions; draft travels into the new session.
   const { handleBranchOff, handleConvertBranch, handleListBranches, handleSwitchBranch, openInWorktree } =
-    useComposerBranch({ clearDraft, cwd, draftRef })
+    useSkuComposerBranch({ clearDraft, cwd, draftRef })
 
   // Global Esc-to-cancel when the chat (not the composer input) has focus.
   // Same explicit-halt semantics as the Stop button: park the queue.
@@ -927,7 +883,7 @@ export function ChatBar({
     voiceActivityState,
     voiceConversationActive,
     voiceStatus
-  } = useComposerVoice({
+  } = useSkuComposerVoice({
     busy,
     clearDraft,
     disabled,
@@ -1244,14 +1200,11 @@ export function ChatBar({
                     composerSurfaceGlass
                   )}
                 />
-                <CodingStatusRow
+                <SkuCodingStatusRow
+                  composerTarget={scope.target}
                   onBranchOff={handleBranchOff}
                   onConvertBranch={handleConvertBranch}
                   onListBranches={handleListBranches}
-                  // A tile's rail reviews ITS worktree: pin the pane's scope to
-                  // this surface's cwd. Main keeps the classic follow-the-
-                  // active-session scope (null).
-                  onOpen={() => toggleReview(scope.target === 'main' ? null : (cwd ?? null))}
                   onOpenWorktree={openInWorktree}
                   onSwitchBranch={handleSwitchBranch}
                   repoPath={cwd}
@@ -1269,8 +1222,8 @@ export function ChatBar({
                     additions beside the "+" menu and before the controls.
                     All four render nothing until something contributes. */}
                   <ContribSlot area={COMPOSER_AREAS.top} />
-                  <VoiceActivity state={voiceActivityState} />
-                  <VoicePlaybackActivity />
+                  <SkuVoiceActivity state={voiceActivityState} />
+                  <SkuVoicePlaybackActivity />
                   {queueEdit && editingQueuedPrompt && (
                     <div className="flex items-center justify-between gap-2 rounded-lg border border-[color-mix(in_srgb,var(--dt-composer-ring)_32%,transparent)] bg-accent/18 px-2 py-1">
                       <div className="min-w-0 text-[0.7rem] text-muted-foreground/88">
@@ -1295,7 +1248,9 @@ export function ChatBar({
                       </div>
                     </div>
                   )}
-                  {attachments.length > 0 && <AttachmentList attachments={attachments} onRemove={onRemoveAttachment} />}
+                  {attachments.length > 0 && (
+                    <SkuAttachmentList attachments={attachments} onRemove={onRemoveAttachment} />
+                  )}
                   <div
                     className={cn(
                       'grid w-full items-center',
@@ -1306,11 +1261,11 @@ export function ChatBar({
                   >
                     <div className="flex h-(--composer-control-size) items-center gap-(--composer-control-gap) self-center [grid-area:menu]">
                       {contextMenu}
-                      <ContribSlot area={COMPOSER_AREAS.leading} />
+                      <SkuComposerLeadingContributions />
                     </div>
                     <div className="min-w-0 [grid-area:input]">{input}</div>
                     <div className="flex h-(--composer-control-size) items-center justify-end gap-(--composer-control-gap) self-center [grid-area:controls]">
-                      <ContribSlot area={COMPOSER_AREAS.actions} />
+                      <SkuComposerActionContributions />
                       {controls}
                     </div>
                   </div>

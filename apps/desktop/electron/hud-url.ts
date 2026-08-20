@@ -22,8 +22,9 @@ export function buildHudWindowUrl(
   {
     devServer,
     profile,
-    rendererIndexPath
-  }: { devServer?: null | string; profile?: null | string; rendererIndexPath?: string } = {}
+    rendererIndexPath,
+    rendererUrl
+  }: { devServer?: null | string; profile?: null | string; rendererIndexPath?: string; rendererUrl?: string } = {}
 ): string {
   const profileKey = typeof profile === 'string' ? profile.trim() : ''
   const query = `?win=hud${profileKey ? `&profile=${encodeURIComponent(profileKey)}` : ''}`
@@ -33,6 +34,10 @@ export function buildHudWindowUrl(
     const base = devServer.endsWith('/') ? devServer.slice(0, -1) : devServer
 
     return `${base}/${query}${route}`
+  }
+
+  if (rendererUrl) {
+    return `${rendererUrl}${query}${route}`
   }
 
   return `${pathToFileURL(rendererIndexPath!).toString()}${query}${route}`

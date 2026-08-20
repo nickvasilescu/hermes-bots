@@ -1,19 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  type GatewayProxyBridge,
+  type GatewayProxyEvent,
   NativeGatewaySocket,
   openAuxiliaryGatewaySocket,
-  resolveGatewayClientTarget,
-  type GatewayProxyBridge,
-  type GatewayProxyEvent
+  resolveGatewayClientTarget
 } from './native-gateway-socket'
 
 function bridgeHarness() {
   let listener: ((event: GatewayProxyEvent) => void) | null = null
+
   const bridge: GatewayProxyBridge = {
     close: vi.fn(),
     onEvent: callback => {
       listener = callback
+
       return () => {
         listener = null
       }
@@ -64,6 +66,7 @@ describe('gateway proxy selection', () => {
   it('does not request or expose a URL in proxy mode', async () => {
     const h = bridgeHarness()
     const getGatewayWsUrl = vi.fn()
+
     const target = await resolveGatewayClientTarget(
       { gatewayProxy: h.bridge, getGatewayWsUrl },
       { authMode: 'token', requireFreshWsUrl: true, useGatewayProxy: true },
@@ -79,6 +82,7 @@ describe('gateway proxy selection', () => {
       constructor(readonly url: string) {}
     }
     vi.stubGlobal('WebSocket', FakeWebSocket)
+
     const socket = await openAuxiliaryGatewaySocket(
       { getGatewayWsUrl: vi.fn().mockResolvedValue('ws://host/api/ws?token=fresh') },
       { authMode: 'token', wsUrl: 'ws://host/api/ws?token=stale' },

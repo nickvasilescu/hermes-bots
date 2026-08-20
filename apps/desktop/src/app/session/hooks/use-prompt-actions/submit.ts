@@ -1,3 +1,4 @@
+import { requestDesktopOnboarding } from '@desktop/onboarding-events'
 import { type MutableRefObject, useCallback } from 'react'
 
 import { PROMPT_SUBMIT_REQUEST_TIMEOUT_MS } from '@/hermes'
@@ -20,7 +21,6 @@ import {
 } from '@/store/composer'
 import { $hudMode } from '@/store/hud'
 import { clearNotifications, notify, notifyError } from '@/store/notifications'
-import { requestDesktopOnboarding } from '@/store/onboarding'
 import {
   $sessions,
   resolveComposerSessionKey,

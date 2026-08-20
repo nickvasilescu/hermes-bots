@@ -29,7 +29,6 @@ import {
   shell,
   systemPreferences
 } from 'electron'
-import nodePty from 'node-pty'
 
 import { classifyActiveRuntime } from './active-runtime-state'
 import { stopBackendChild as stopBackendChildImpl, stopBackendTreesForUpdate } from './backend-child'
@@ -166,6 +165,11 @@ import { buildHudWindowUrl } from './hud-url'
 import { IPC_CHANNEL_POLICY } from './ipc-channel-policy'
 import { createAuthorizedIpc } from './ipc-policy'
 import { IpcTrustRegistry, type WindowCapability } from './ipc-trust'
+import {
+  KORGO_RENDERER_ENTRY_URL,
+  registerKorgoRendererProtocol,
+  registerKorgoRendererScheme
+} from './korgo-renderer-protocol'
 import { registerLinkTitleIntegration } from './link-title-integration'
 import { ensureMainWindow } from './main-window-lifecycle'
 import { mayGrantMediaPermission } from './media-permission-policy'
@@ -250,6 +254,7 @@ import {
   SESSION_WINDOW_MIN_WIDTH
 } from './session-windows'
 import { registerMarketplaceThemeHandlers, registerSkuIntegrations } from './sku-integrations'
+import { spawnPty } from './sku-integrations.node-pty'
 import { windowsSandboxIntegration } from './sku-integrations.windows-sandbox'
 import { ensureSpawnHelperExecutable } from './spawn-helper-perms'
 import { assertSshOnlyApiRequestAllowed } from './ssh-api-policy'
@@ -335,12 +340,17 @@ const IS_WSL = isWslEnvironment()
 const DARWIN_MAJOR = IS_MAC ? Number.parseInt(os.release(), 10) || 0 : 0
 const APP_ROOT = app.getAppPath()
 
+if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  registerKorgoRendererScheme(protocol)
+}
+
 const ipcTrustRegistry = new IpcTrustRegistry()
 
 const trustedRendererUrl = (url: string) =>
   isTrustedRendererUrl(url, {
     devServerUrl: DEV_SERVER,
     isPackaged: IS_PACKAGED,
+    packagedRendererUrl: isSshOnlyProduct() ? KORGO_RENDERER_ENTRY_URL : undefined,
     rendererEntryPath: resolveRendererIndex()
   })
 
@@ -1039,17 +1049,19 @@ const STREAMABLE_MEDIA_EXTS = new Set([
   '.webm'
 ])
 
-protocol.registerSchemesAsPrivileged([
-  {
-    scheme: MEDIA_PROTOCOL,
-    privileges: {
-      secure: true,
-      standard: true,
-      stream: true,
-      supportFetchAPI: true
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  protocol.registerSchemesAsPrivileged([
+    {
+      scheme: MEDIA_PROTOCOL,
+      privileges: {
+        secure: true,
+        standard: true,
+        stream: true,
+        supportFetchAPI: true
+      }
     }
-  }
-])
+  ])
+}
 
 function registerMediaProtocol() {
   protocol.handle(MEDIA_PROTOCOL, async request => {
@@ -3586,6 +3598,14 @@ function resolveRendererIndex() {
   )
 
   return candidates[0]
+}
+
+function rendererEntryUrl() {
+  if (DEV_SERVER) {
+    return DEV_SERVER.endsWith('/') ? DEV_SERVER.slice(0, -1) : DEV_SERVER
+  }
+
+  return isSshOnlyProduct() ? KORGO_RENDERER_ENTRY_URL : pathToFileURL(resolveRendererIndex()).toString()
 }
 
 // True when `dir` lives inside the packaged app bundle / install tree.
@@ -9096,9 +9116,14 @@ function wireCommonWindowHandlers(win, { zoom = true }: { zoom?: boolean } = {})
     win.webContents.on('did-finish-load', () => restorePersistedZoomLevel(win))
   }
 
-  installContextMenu(win)
+  if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+    installContextMenu(win)
+  }
+
   win.webContents.setWindowOpenHandler(details => {
-    openExternalUrl(details.url)
+    if (!isSshOnlyProduct()) {
+      openExternalUrl(details.url)
+    }
 
     return { action: 'deny' }
   })
@@ -9108,7 +9133,10 @@ function wireCommonWindowHandlers(win, { zoom = true }: { zoom?: boolean } = {})
     }
 
     event.preventDefault()
-    openExternalUrl(url)
+
+    if (!isSshOnlyProduct()) {
+      openExternalUrl(url)
+    }
   })
 }
 
@@ -9225,7 +9253,8 @@ function spawnSecondaryWindow({ sessionId, watch }: { sessionId?: string; watch?
     win,
     buildSessionWindowUrl(sessionId, {
       devServer: DEV_SERVER,
-      rendererIndexPath: DEV_SERVER ? undefined : resolveRendererIndex(),
+      rendererIndexPath: DEV_SERVER || isSshOnlyProduct() ? undefined : resolveRendererIndex(),
+      rendererUrl: !DEV_SERVER && isSshOnlyProduct() ? rendererEntryUrl() : undefined,
       watch
     }),
     'Session window'
@@ -9327,7 +9356,7 @@ function createInstanceWindow() {
   })
 
   attachRendererConsoleCapture(win, 'instance', rememberLog)
-  loadWindowUrl(win, DEV_SERVER || pathToFileURL(resolveRendererIndex()).toString(), 'Instance window')
+  loadWindowUrl(win, rendererEntryUrl(), 'Instance window')
 
   return win
 }
@@ -9340,7 +9369,7 @@ const wakeIndicatorController = createWakeIndicatorWindowController({
   loadWindowUrl,
   log: rememberLog,
   preloadPath: PRELOAD_PATH,
-  rendererIndex: resolveRendererIndex,
+  rendererUrl: rendererEntryUrl,
   wireWindow: window => wireCommonWindowHandlers(window, zoomWiringForWindowKind('wakeIndicator'))
 })
 
@@ -9358,7 +9387,7 @@ function petOverlayUrl() {
     return `${DEV_SERVER.endsWith('/') ? DEV_SERVER.slice(0, -1) : DEV_SERVER}/?win=overlay#/`
   }
 
-  return `${pathToFileURL(resolveRendererIndex()).toString()}?win=overlay#/`
+  return `${rendererEntryUrl()}?win=overlay#/`
 }
 
 function spawnPetOverlayWindow(bounds) {
@@ -9707,7 +9736,8 @@ function hudUrl(sessionId, profile) {
   return buildHudWindowUrl(sessionId, {
     devServer: DEV_SERVER,
     profile,
-    rendererIndexPath: DEV_SERVER ? undefined : resolveRendererIndex()
+    rendererIndexPath: DEV_SERVER || isSshOnlyProduct() ? undefined : resolveRendererIndex(),
+    rendererUrl: !DEV_SERVER && isSshOnlyProduct() ? rendererEntryUrl() : undefined
   })
 }
 
@@ -9956,7 +9986,7 @@ function quickEntryUrl() {
     return `${DEV_SERVER.endsWith('/') ? DEV_SERVER.slice(0, -1) : DEV_SERVER}/?win=quick#/`
   }
 
-  return `${pathToFileURL(resolveRendererIndex()).toString()}?win=quick#/`
+  return `${rendererEntryUrl()}?win=quick#/`
 }
 
 function spawnQuickEntryWindow() {
@@ -10272,7 +10302,7 @@ function createWindow() {
   // quick-entry windows used to vanish without a trace).
   attachRendererConsoleCapture(mainWindow, 'main', rememberLog)
 
-  loadWindowUrl(mainWindow, DEV_SERVER || pathToFileURL(resolveRendererIndex()).toString(), 'Renderer')
+  loadWindowUrl(mainWindow, rendererEntryUrl(), 'Renderer')
 
   // Start the Python backend NOW, in parallel with the renderer load — not on
   // did-finish-load. The backend cold boot (spawn → port announce → /api/status)
@@ -10428,123 +10458,130 @@ ipcMain.on('hermes:zoom:set-percent', (event, percent) => {
 // content origin so the pet lands where it sat in-window. A remembered/dragged
 // spot passes screen-space bounds (screen=true) and is used as-is. We return the
 // resolved screen bounds so the renderer can persist exactly where it opened.
-ipcMain.handle('hermes:pet-overlay:open', async (_event, request) => {
-  const bounds = request && request.bounds ? request.bounds : request
-  const isScreen = Boolean(request && request.screen)
-  let screenBounds = bounds
+// Keep the direct build-time SKU branch around host-tool callbacks. Esbuild
+// retains the body of `undefined?.(() => ...)`, which would leave privileged
+// handlers and their channel names in the SSH artifact even though unreachable.
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.handle('hermes:pet-overlay:open', async (_event, request) => {
+      const bounds = request && request.bounds ? request.bounds : request
+      const isScreen = Boolean(request && request.screen)
+      let screenBounds = bounds
 
-  try {
-    if (bounds && !isScreen && mainWindow && !mainWindow.isDestroyed()) {
-      const content = mainWindow.getContentBounds()
-      screenBounds = {
-        x: content.x + (bounds.x || 0),
-        y: content.y + (bounds.y || 0),
-        width: bounds.width,
-        height: bounds.height
+      try {
+        if (bounds && !isScreen && mainWindow && !mainWindow.isDestroyed()) {
+          const content = mainWindow.getContentBounds()
+          screenBounds = {
+            x: content.x + (bounds.x || 0),
+            y: content.y + (bounds.y || 0),
+            width: bounds.width,
+            height: bounds.height
+          }
+        }
+      } catch {
+        // Fall back to raw bounds if the window geometry is unavailable.
       }
-    }
-  } catch {
-    // Fall back to raw bounds if the window geometry is unavailable.
-  }
 
-  openPetOverlay(screenBounds)
+      openPetOverlay(screenBounds)
 
-  return { ok: true, bounds: screenBounds }
-})
-ipcMain.handle('hermes:pet-overlay:close', async () => {
-  closePetOverlay()
+      return { ok: true, bounds: screenBounds }
+    })
+    ipcMain.handle('hermes:pet-overlay:close', async () => {
+      closePetOverlay()
 
-  return { ok: true }
-})
-// Drag/resize: the overlay reports new absolute screen bounds (it already knows
-// the pointer's screen coords). Drag keeps the size constant; the wheel-to-scale
-// gesture grows/shrinks it so the sprite is never cropped by the window edge.
-// The window is created non-resizable (no stray edge-drag on the transparent
-// frameless panel), which on Windows/Linux also blocks programmatic setBounds
-// sizing — so briefly flip resizable on whenever the size actually changes.
-ipcMain.on('hermes:pet-overlay:set-bounds', (_event, bounds) => {
-  if (!petOverlayWindow || petOverlayWindow.isDestroyed() || !bounds) {
-    return
-  }
+      return { ok: true }
+    })
+    // Drag/resize: the overlay reports new absolute screen bounds (it already knows
+    // the pointer's screen coords). Drag keeps the size constant; the wheel-to-scale
+    // gesture grows/shrinks it so the sprite is never cropped by the window edge.
+    // The window is created non-resizable (no stray edge-drag on the transparent
+    // frameless panel), which on Windows/Linux also blocks programmatic setBounds
+    // sizing — so briefly flip resizable on whenever the size actually changes.
+    ipcMain.on('hermes:pet-overlay:set-bounds', (_event, bounds) => {
+      if (!petOverlayWindow || petOverlayWindow.isDestroyed() || !bounds) {
+        return
+      }
 
-  const win = petOverlayWindow
-  const width = Math.max(80, Math.round(bounds.width))
-  const height = Math.max(80, Math.round(bounds.height))
-  const [curW, curH] = win.getSize()
-  const resizing = width !== curW || height !== curH
+      const win = petOverlayWindow
+      const width = Math.max(80, Math.round(bounds.width))
+      const height = Math.max(80, Math.round(bounds.height))
+      const [curW, curH] = win.getSize()
+      const resizing = width !== curW || height !== curH
 
-  if (resizing && !win.isResizable()) {
-    win.setResizable(true)
-  }
+      if (resizing && !win.isResizable()) {
+        win.setResizable(true)
+      }
 
-  win.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width, height })
+      win.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width, height })
 
-  if (resizing) {
-    win.setResizable(false)
-  }
-})
-// Click-through: the overlay window is a full rectangle but only the pet pixels
-// should be interactive. The renderer toggles this as the cursor enters/leaves
-// the sprite so transparent margins pass clicks to whatever is behind.
-ipcMain.on('hermes:pet-overlay:ignore-mouse', (_event, ignore) => {
-  if (petOverlayWindow && !petOverlayWindow.isDestroyed()) {
-    petOverlayWindow.setIgnoreMouseEvents(Boolean(ignore), { forward: true })
-  }
-})
-// The overlay is a non-activating panel (focusable:false) so it never steals
-// the app's cmd/alt-tab anchor from the main window. But the pop-up composer
-// needs the keyboard, so the renderer asks us to flip it focusable + focus it
-// while the composer is open, then back to non-activating when it closes.
-ipcMain.on('hermes:pet-overlay:set-focusable', (_event, focusable) => {
-  if (!petOverlayWindow || petOverlayWindow.isDestroyed()) {
-    return
-  }
+      if (resizing) {
+        win.setResizable(false)
+      }
+    })
+    // Click-through: the overlay window is a full rectangle but only the pet pixels
+    // should be interactive. The renderer toggles this as the cursor enters/leaves
+    // the sprite so transparent margins pass clicks to whatever is behind.
+    ipcMain.on('hermes:pet-overlay:ignore-mouse', (_event, ignore) => {
+      if (petOverlayWindow && !petOverlayWindow.isDestroyed()) {
+        petOverlayWindow.setIgnoreMouseEvents(Boolean(ignore), { forward: true })
+      }
+    })
+    // The overlay is a non-activating panel (focusable:false) so it never steals
+    // the app's cmd/alt-tab anchor from the main window. But the pop-up composer
+    // needs the keyboard, so the renderer asks us to flip it focusable + focus it
+    // while the composer is open, then back to non-activating when it closes.
+    ipcMain.on('hermes:pet-overlay:set-focusable', (_event, focusable) => {
+      if (!petOverlayWindow || petOverlayWindow.isDestroyed()) {
+        return
+      }
 
-  petOverlayWindow.setFocusable(Boolean(focusable))
+      petOverlayWindow.setFocusable(Boolean(focusable))
 
-  if (focusable) {
-    petOverlayWindow.focus()
-  }
-})
-// Main renderer → overlay: forward the latest pet state for the overlay to render.
-ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
-  if (petOverlayWindow && !petOverlayWindow.isDestroyed()) {
-    petOverlayWindow.webContents.send('hermes:pet-overlay:state', payload)
-  }
-})
-// Overlay → main renderer: control messages (pop back in, composer submit).
-ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return
-  }
+      if (focusable) {
+        petOverlayWindow.focus()
+      }
+    })
+    // Main renderer → overlay: forward the latest pet state for the overlay to render.
+    ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
+      if (petOverlayWindow && !petOverlayWindow.isDestroyed()) {
+        petOverlayWindow.webContents.send('hermes:pet-overlay:state', payload)
+      }
+    })
+    // Overlay → main renderer: control messages (pop back in, composer submit).
+    ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        return
+      }
 
-  // Double-click toggles the app window: hide it away if it's up front, bring it
-  // back if it's minimized/buried. Pure window control — nothing for the
-  // renderer to do, so don't forward it.
-  if (payload && payload.type === 'toggle-app') {
-    if (mainWindow.isMinimized() || !mainWindow.isVisible()) {
-      mainWindow.show()
-      mainWindow.focus()
-    } else {
-      mainWindow.minimize()
-    }
+      // Double-click toggles the app window: hide it away if it's up front, bring it
+      // back if it's minimized/buried. Pure window control — nothing for the
+      // renderer to do, so don't forward it.
+      if (payload && payload.type === 'toggle-app') {
+        if (mainWindow.isMinimized() || !mainWindow.isVisible()) {
+          mainWindow.show()
+          mainWindow.focus()
+        } else {
+          mainWindow.minimize()
+        }
 
-    return
-  }
+        return
+      }
 
-  // The mail icon means "take me to the app": raise the main window (it may be
-  // minimized or buried) before the renderer navigates to the latest thread.
-  if (payload && payload.type === 'open-app') {
-    if (mainWindow.isMinimized()) {
-      mainWindow.restore()
-    }
+      // The mail icon means "take me to the app": raise the main window (it may be
+      // minimized or buried) before the renderer navigates to the latest thread.
+      if (payload && payload.type === 'open-app') {
+        if (mainWindow.isMinimized()) {
+          mainWindow.restore()
+        }
 
-    mainWindow.show()
-    mainWindow.focus()
-  }
+        mainWindow.show()
+        mainWindow.focus()
+      }
 
-  mainWindow.webContents.send('hermes:pet-overlay:control', payload)
-})
+      mainWindow.webContents.send('hermes:pet-overlay:control', payload)
+    })
+  })
+}
 
 // --- HUD mode (chrome-free floating chat) -----------------------------------
 ipcMain.handle('hermes:hud:open', async (_event, request) => {
@@ -10829,50 +10866,56 @@ if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
 ipcMain.handle('hermes:connection-config:get', async (_event, profile) =>
   sanitizeDesktopConnectionConfig(readDesktopConnectionConfig(), profile)
 )
-ipcMain.handle('hermes:ssh-config:hosts', async () => ({ hosts: collectSshConfigHosts() }))
-ipcMain.handle('hermes:ssh-config:resolve', async (_event, host) => {
-  const value = String(host || '').trim()
 
-  if (!value) {
-    throw new Error('SSH host is required.')
-  }
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.handle('hermes:ssh-config:hosts', async () => ({ hosts: collectSshConfigHosts() }))
+    ipcMain.handle('hermes:ssh-config:resolve', async (_event, host) => {
+      const value = String(host || '').trim()
 
-  const ssh =
-    process.platform === 'win32'
-      ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe')
-      : 'ssh'
-
-  return new Promise((resolve, reject) => {
-    const child = spawn(ssh, ['-G', '--', value], hiddenWindowsChildOptions({ stdio: ['ignore', 'pipe', 'pipe'] }))
-    let stdout = ''
-    let stderr = ''
-
-    const timer = setTimeout(() => {
-      child.kill()
-      reject(new Error('SSH config resolution timed out.'))
-    }, 10_000)
-
-    child.stdout.on('data', chunk => {
-      stdout += String(chunk)
-    })
-    child.stderr.on('data', chunk => {
-      stderr += String(chunk)
-    })
-    child.once('error', error => {
-      clearTimeout(timer)
-      reject(error)
-    })
-    child.once('close', code => {
-      clearTimeout(timer)
-
-      if (code !== 0) {
-        reject(new Error(stderr.trim() || 'Could not resolve SSH host.'))
-      } else {
-        resolve(parseSshGOutput(stdout))
+      if (!value) {
+        throw new Error('SSH host is required.')
       }
+
+      const ssh =
+        process.platform === 'win32'
+          ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe')
+          : 'ssh'
+
+      return new Promise((resolve, reject) => {
+        const child = spawn(ssh, ['-G', '--', value], hiddenWindowsChildOptions({ stdio: ['ignore', 'pipe', 'pipe'] }))
+        let stdout = ''
+        let stderr = ''
+
+        const timer = setTimeout(() => {
+          child.kill()
+          reject(new Error('SSH config resolution timed out.'))
+        }, 10_000)
+
+        child.stdout.on('data', chunk => {
+          stdout += String(chunk)
+        })
+        child.stderr.on('data', chunk => {
+          stderr += String(chunk)
+        })
+        child.once('error', error => {
+          clearTimeout(timer)
+          reject(error)
+        })
+        child.once('close', code => {
+          clearTimeout(timer)
+
+          if (code !== 0) {
+            reject(new Error(stderr.trim() || 'Could not resolve SSH host.'))
+          } else {
+            resolve(parseSshGOutput(stdout))
+          }
+        })
+      })
     })
   })
-})
+}
+
 ipcMain.handle('hermes:connection-config:test', async (_event, payload) => testDesktopConnectionConfig(payload))
 
 if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
@@ -11079,9 +11122,13 @@ ipcMain.handle('hermes:profile:set', async (_event, name) => {
   return { profile: next }
 })
 
-ipcMain.on('hermes:previewShortcutActive', (_event, active) => {
-  previewShortcutActive = Boolean(active)
-})
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.on('hermes:previewShortcutActive', (_event, active) => {
+      previewShortcutActive = Boolean(active)
+    })
+  })
+}
 
 ipcMain.handle('hermes:requestMicrophoneAccess', async () => {
   if (!IS_MAC || typeof systemPreferences.askForMediaAccess !== 'function') {
@@ -11095,20 +11142,24 @@ ipcMain.handle('hermes:requestMicrophoneAccess', async () => {
 // Metadata only (app, title, bounds) — never pixels. On macOS, other apps'
 // window titles are gated behind the Screen Recording permission; pass titles
 // through only when it is ALREADY granted, and never prompt for it here.
-ipcMain.handle('hermes:window:readBelow', async event => {
-  const win = BrowserWindow.fromWebContents(event.sender)
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.handle('hermes:window:readBelow', async event => {
+      const win = BrowserWindow.fromWebContents(event.sender)
 
-  if (!win || win.isDestroyed()) {
-    return null
-  }
+      if (!win || win.isDestroyed()) {
+        return null
+      }
 
-  const titlesAvailable = IS_MAC ? systemPreferences.getMediaAccessStatus?.('screen') === 'granted' : true
+      const titlesAvailable = IS_MAC ? systemPreferences.getMediaAccessStatus?.('screen') === 'granted' : true
 
-  const [x, y] = win.getPosition()
-  const [width, height] = win.getSize()
+      const [x, y] = win.getPosition()
+      const [width, height] = win.getSize()
 
-  return readWindowBelow(process.pid, { x, y, width, height }, titlesAvailable)
-})
+      return readWindowBelow(process.pid, { x, y, width, height }, titlesAvailable)
+    })
+  })
+}
 
 // Re-route remote-profile session requests to the owning remote backend. Returns
 // `undefined` when not interceptable (caller takes the normal local path), else
@@ -11518,177 +11569,184 @@ function persistDataUrlReadMaxMb(maxMb) {
   return next
 }
 
-ipcMain.handle('hermes:data-url-read-max:get', () => ({
-  maxMb: dataUrlReadMaxMb,
-  // Keep the default bytes constant visible for tests / diagnostics.
-  defaultMaxMb: DATA_URL_READ_DEFAULT_MAX_MB,
-  maxBytes: dataUrlReadMaxBytesFromMb(dataUrlReadMaxMb)
-}))
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.handle('hermes:data-url-read-max:get', () => ({
+      maxMb: dataUrlReadMaxMb,
+      // Keep the default bytes constant visible for tests / diagnostics.
+      defaultMaxMb: DATA_URL_READ_DEFAULT_MAX_MB,
+      maxBytes: dataUrlReadMaxBytesFromMb(dataUrlReadMaxMb)
+    }))
 
-ipcMain.handle('hermes:data-url-read-max:set', (_event, maxMb) => {
-  const next = persistDataUrlReadMaxMb(maxMb)
+    ipcMain.handle('hermes:data-url-read-max:set', (_event, maxMb) => {
+      const next = persistDataUrlReadMaxMb(maxMb)
 
-  return {
-    maxMb: next,
-    defaultMaxMb: DATA_URL_READ_DEFAULT_MAX_MB,
-    maxBytes: dataUrlReadMaxBytesFromMb(next)
-  }
-})
+      return {
+        maxMb: next,
+        defaultMaxMb: DATA_URL_READ_DEFAULT_MAX_MB,
+        maxBytes: dataUrlReadMaxBytesFromMb(next)
+      }
+    })
 
-ipcMain.handle('hermes:readFileDataUrl', async (_event, filePath) => {
-  return readFileDataUrlForIpc(filePath, {
-    maxBytes: dataUrlReadMaxBytesFromMb(dataUrlReadMaxMb),
-    mimeType: mimeTypeForPath(resolveRequestedPathForIpc(filePath, { purpose: 'File preview' })),
-    purpose: 'File preview'
+    ipcMain.handle('hermes:readFileDataUrl', async (_event, filePath) => {
+      return readFileDataUrlForIpc(filePath, {
+        maxBytes: dataUrlReadMaxBytesFromMb(dataUrlReadMaxMb),
+        mimeType: mimeTypeForPath(resolveRequestedPathForIpc(filePath, { purpose: 'File preview' })),
+        purpose: 'File preview'
+      })
+    })
+
+    // Remote attachment transfer is independent of the preview / Settings path.
+    // Keep a finite cap so Electron + base64 memory stays bounded while archives
+    // can exceed the default 16 MiB preview ceiling (and still fit the gateway
+    // WebSocket frame limit after base64 expansion).
+    ipcMain.handle('hermes:readFileDataUrlForAttach', async (_event, filePath) => {
+      return readFileDataUrlForIpc(filePath, {
+        maxBytes: ATTACHMENT_UPLOAD_DEFAULT_MAX_BYTES,
+        mimeType: mimeTypeForPath(resolveRequestedPathForIpc(filePath, { purpose: 'Attachment upload' })),
+        purpose: 'Attachment upload'
+      })
+    })
+
+    ipcMain.handle('hermes:readFileText', async (_event, filePath) => {
+      const { resolvedPath, stat } = await resolveReadableFileForIpc(filePath, {
+        maxBytes: TEXT_PREVIEW_SOURCE_MAX_BYTES,
+        purpose: 'Text preview'
+      })
+
+      const ext = path.extname(resolvedPath).toLowerCase()
+      const handle = await fs.promises.open(resolvedPath, 'r')
+      const bytesToRead = Math.min(stat.size, TEXT_PREVIEW_MAX_BYTES)
+
+      try {
+        const buffer = Buffer.alloc(bytesToRead)
+        const { bytesRead } = await handle.read(buffer, 0, bytesToRead, 0)
+
+        return {
+          binary: looksBinary(buffer.subarray(0, Math.min(bytesRead, 4096))),
+          byteSize: stat.size,
+          language: PREVIEW_LANGUAGE_BY_EXT[ext] || 'text',
+          mimeType: mimeTypeForPath(resolvedPath),
+          path: resolvedPath,
+          text: buffer.subarray(0, bytesRead).toString('utf8'),
+          truncated: stat.size > TEXT_PREVIEW_MAX_BYTES
+        }
+      } finally {
+        await handle.close()
+      }
+    })
+
+    ipcMain.handle('hermes:selectPaths', async (_event, options: any = {}) => {
+      const properties = options?.directories ? ['openDirectory'] : ['openFile']
+
+      if (options?.multiple !== false) {
+        properties.push('multiSelections')
+      }
+
+      let resolvedDefaultPath
+
+      if (options?.defaultPath) {
+        try {
+          // On a Windows host with a WSL backend the cwd may be a POSIX/WSL path;
+          // bridge it to a UNC/drive form the native dialog can actually open.
+          const bridged = IS_WINDOWS
+            ? resolvePickerDefaultPath(String(options.defaultPath))
+            : String(options.defaultPath)
+
+          resolvedDefaultPath = bridged ? path.resolve(bridged) : undefined
+        } catch {
+          resolvedDefaultPath = undefined
+        }
+      }
+
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: options?.title || 'Add context',
+        defaultPath: resolvedDefaultPath,
+        properties: properties as any,
+        filters: Array.isArray(options?.filters) ? options.filters : undefined
+      })
+
+      if (result.canceled) {
+        return []
+      }
+
+      return result.filePaths
+    })
+
+    ipcMain.handle('hermes:writeClipboard', (_event, text) => {
+      clipboard.writeText(String(text || ''))
+
+      return true
+    })
+
+    // Native save-location picker (profile export etc.) — the write itself happens
+    // elsewhere (the backend, for profile archives); this only picks the path.
+    ipcMain.handle('hermes:selectSavePath', async (_event, options: any = {}) => {
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: options?.title || 'Save',
+        defaultPath: options?.defaultPath ? String(options.defaultPath) : undefined,
+        filters: Array.isArray(options?.filters) ? options.filters : undefined
+      })
+
+      if (result.canceled || !result.filePath) {
+        return null
+      }
+
+      return result.filePath
+    })
+
+    // Paired reader for the GUI terminal's paste chord: the renderer's
+    // navigator.clipboard.readText() throws "Document is not focused" whenever a
+    // portaled overlay has focus, and there's no way to route a read through the
+    // canvas. The main process has no such gate.
+    ipcMain.handle('hermes:readClipboard', () => clipboard.readText())
+
+    ipcMain.handle('hermes:saveImageFromUrl', (_event, url) => saveImageFromUrl(String(url || '')))
+
+    ipcMain.handle('hermes:saveImageBuffer', async (_event, payload) => {
+      const data = payload?.data
+
+      if (!data) {
+        throw new Error('saveImageBuffer: missing data')
+      }
+
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data)
+
+      return writeComposerImage(buffer, payload?.ext || '.png')
+    })
+
+    ipcMain.handle('hermes:saveClipboardImage', async () => {
+      const image = clipboard.readImage()
+
+      if (image && !image.isEmpty()) {
+        return writeComposerImage(image.toPNG(), '.png')
+      }
+
+      // WSL2/WSLg doesn't bridge clipboard *images* from the Windows host to the
+      // Linux clipboard Electron reads, so a host screenshot looks empty above.
+      // Pull it straight off the Windows clipboard via PowerShell as a fallback.
+      if (IS_WSL) {
+        const png = readWslWindowsClipboardImage()
+
+        if (png) {
+          return writeComposerImage(png, '.png')
+        }
+      }
+
+      return ''
+    })
+
+    ipcMain.handle('hermes:normalizePreviewTarget', (_event, target, baseDir) =>
+      normalizePreviewTarget(String(target || ''), baseDir ? String(baseDir) : '')
+    )
+
+    ipcMain.handle('hermes:watchPreviewFile', (_event, url) => watchPreviewFile(String(url || '')))
+
+    ipcMain.handle('hermes:watchDirectory', (_event, dir) => watchDirectory(String(dir || '')))
+
+    ipcMain.handle('hermes:stopPreviewFileWatch', (_event, id) => stopPreviewFileWatch(String(id || '')))
   })
-})
-
-// Remote attachment transfer is independent of the preview / Settings path.
-// Keep a finite cap so Electron + base64 memory stays bounded while archives
-// can exceed the default 16 MiB preview ceiling (and still fit the gateway
-// WebSocket frame limit after base64 expansion).
-ipcMain.handle('hermes:readFileDataUrlForAttach', async (_event, filePath) => {
-  return readFileDataUrlForIpc(filePath, {
-    maxBytes: ATTACHMENT_UPLOAD_DEFAULT_MAX_BYTES,
-    mimeType: mimeTypeForPath(resolveRequestedPathForIpc(filePath, { purpose: 'Attachment upload' })),
-    purpose: 'Attachment upload'
-  })
-})
-
-ipcMain.handle('hermes:readFileText', async (_event, filePath) => {
-  const { resolvedPath, stat } = await resolveReadableFileForIpc(filePath, {
-    maxBytes: TEXT_PREVIEW_SOURCE_MAX_BYTES,
-    purpose: 'Text preview'
-  })
-
-  const ext = path.extname(resolvedPath).toLowerCase()
-  const handle = await fs.promises.open(resolvedPath, 'r')
-  const bytesToRead = Math.min(stat.size, TEXT_PREVIEW_MAX_BYTES)
-
-  try {
-    const buffer = Buffer.alloc(bytesToRead)
-    const { bytesRead } = await handle.read(buffer, 0, bytesToRead, 0)
-
-    return {
-      binary: looksBinary(buffer.subarray(0, Math.min(bytesRead, 4096))),
-      byteSize: stat.size,
-      language: PREVIEW_LANGUAGE_BY_EXT[ext] || 'text',
-      mimeType: mimeTypeForPath(resolvedPath),
-      path: resolvedPath,
-      text: buffer.subarray(0, bytesRead).toString('utf8'),
-      truncated: stat.size > TEXT_PREVIEW_MAX_BYTES
-    }
-  } finally {
-    await handle.close()
-  }
-})
-
-ipcMain.handle('hermes:selectPaths', async (_event, options: any = {}) => {
-  const properties = options?.directories ? ['openDirectory'] : ['openFile']
-
-  if (options?.multiple !== false) {
-    properties.push('multiSelections')
-  }
-
-  let resolvedDefaultPath
-
-  if (options?.defaultPath) {
-    try {
-      // On a Windows host with a WSL backend the cwd may be a POSIX/WSL path;
-      // bridge it to a UNC/drive form the native dialog can actually open.
-      const bridged = IS_WINDOWS ? resolvePickerDefaultPath(String(options.defaultPath)) : String(options.defaultPath)
-      resolvedDefaultPath = bridged ? path.resolve(bridged) : undefined
-    } catch {
-      resolvedDefaultPath = undefined
-    }
-  }
-
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: options?.title || 'Add context',
-    defaultPath: resolvedDefaultPath,
-    properties: properties as any,
-    filters: Array.isArray(options?.filters) ? options.filters : undefined
-  })
-
-  if (result.canceled) {
-    return []
-  }
-
-  return result.filePaths
-})
-
-ipcMain.handle('hermes:writeClipboard', (_event, text) => {
-  clipboard.writeText(String(text || ''))
-
-  return true
-})
-
-// Native save-location picker (profile export etc.) — the write itself happens
-// elsewhere (the backend, for profile archives); this only picks the path.
-ipcMain.handle('hermes:selectSavePath', async (_event, options: any = {}) => {
-  const result = await dialog.showSaveDialog(mainWindow, {
-    title: options?.title || 'Save',
-    defaultPath: options?.defaultPath ? String(options.defaultPath) : undefined,
-    filters: Array.isArray(options?.filters) ? options.filters : undefined
-  })
-
-  if (result.canceled || !result.filePath) {
-    return null
-  }
-
-  return result.filePath
-})
-
-// Paired reader for the GUI terminal's paste chord: the renderer's
-// navigator.clipboard.readText() throws "Document is not focused" whenever a
-// portaled overlay has focus, and there's no way to route a read through the
-// canvas. The main process has no such gate.
-ipcMain.handle('hermes:readClipboard', () => clipboard.readText())
-
-ipcMain.handle('hermes:saveImageFromUrl', (_event, url) => saveImageFromUrl(String(url || '')))
-
-ipcMain.handle('hermes:saveImageBuffer', async (_event, payload) => {
-  const data = payload?.data
-
-  if (!data) {
-    throw new Error('saveImageBuffer: missing data')
-  }
-
-  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data)
-
-  return writeComposerImage(buffer, payload?.ext || '.png')
-})
-
-ipcMain.handle('hermes:saveClipboardImage', async () => {
-  const image = clipboard.readImage()
-
-  if (image && !image.isEmpty()) {
-    return writeComposerImage(image.toPNG(), '.png')
-  }
-
-  // WSL2/WSLg doesn't bridge clipboard *images* from the Windows host to the
-  // Linux clipboard Electron reads, so a host screenshot looks empty above.
-  // Pull it straight off the Windows clipboard via PowerShell as a fallback.
-  if (IS_WSL) {
-    const png = readWslWindowsClipboardImage()
-
-    if (png) {
-      return writeComposerImage(png, '.png')
-    }
-  }
-
-  return ''
-})
-
-ipcMain.handle('hermes:normalizePreviewTarget', (_event, target, baseDir) =>
-  normalizePreviewTarget(String(target || ''), baseDir ? String(baseDir) : '')
-)
-
-ipcMain.handle('hermes:watchPreviewFile', (_event, url) => watchPreviewFile(String(url || '')))
-
-ipcMain.handle('hermes:watchDirectory', (_event, dir) => watchDirectory(String(dir || '')))
-
-ipcMain.handle('hermes:stopPreviewFileWatch', (_event, id) => stopPreviewFileWatch(String(id || '')))
+}
 
 // Each renderer reports the turns it has in flight; the quit guard reads the
 // merged picture. Keyed by webContents id so a closed window stops counting.
@@ -11863,11 +11921,15 @@ ipcMain.on('hermes:quick-entry:state', (_event, payload) => {
 
 ipcMain.on('hermes:quick-entry:dismiss', () => hideQuickEntryWindow())
 
-ipcMain.handle('hermes:openExternal', (_event, url) => {
-  if (!openExternalUrl(url)) {
-    throw new Error('Invalid external URL')
-  }
-})
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.handle('hermes:openExternal', (_event, url) => {
+      if (!openExternalUrl(url)) {
+        throw new Error('Invalid external URL')
+      }
+    })
+  })
+}
 
 // ── Find-in-page (Ctrl/Cmd+F) ─────────────────────────────────────────────
 // The desktop supports multiple BrowserWindows (one primary plus any
@@ -11924,73 +11986,77 @@ ipcMain.handle('hermes:stop-find-in-page', event => {
   stopFind(win.webContents)
 })
 
-ipcMain.handle('hermes:openPreviewInBrowser', async (_event, url) => {
-  if (!(await openPreviewInBrowser(url))) {
-    throw new Error('Invalid preview URL')
-  }
-})
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.handle('hermes:openPreviewInBrowser', async (_event, url) => {
+      if (!(await openPreviewInBrowser(url))) {
+        throw new Error('Invalid preview URL')
+      }
+    })
 
-// User-configurable default project directory. The renderer reads this on
-// settings mount and seeds the value into the picker; writing back persists
-// it via writeDefaultProjectDir so resolveHermesCwd picks it up on the next
-// session spawn (no app restart needed).
-ipcMain.handle('hermes:setting:defaultProjectDir:get', async () => ({
-  dir: readDefaultProjectDir(),
-  defaultLabel: app.getPath('home'),
-  resolvedCwd: resolveHermesCwd()
-}))
+    // User-configurable default project directory. The renderer reads this on
+    // settings mount and seeds the value into the picker; writing back persists
+    // it via writeDefaultProjectDir so resolveHermesCwd picks it up on the next
+    // session spawn (no app restart needed).
+    ipcMain.handle('hermes:setting:defaultProjectDir:get', async () => ({
+      dir: readDefaultProjectDir(),
+      defaultLabel: app.getPath('home'),
+      resolvedCwd: resolveHermesCwd()
+    }))
 
-ipcMain.handle('hermes:workspace:sanitize', async (_event, cwd) => sanitizeWorkspaceCwd(cwd))
+    ipcMain.handle('hermes:workspace:sanitize', async (_event, cwd) => sanitizeWorkspaceCwd(cwd))
 
-ipcMain.handle('hermes:setting:defaultProjectDir:set', async (_event, dir) => {
-  const next = typeof dir === 'string' && dir.trim() ? dir.trim() : null
+    ipcMain.handle('hermes:setting:defaultProjectDir:set', async (_event, dir) => {
+      const next = typeof dir === 'string' && dir.trim() ? dir.trim() : null
 
-  if (next) {
-    try {
-      fs.mkdirSync(next, { recursive: true })
-    } catch (error) {
-      throw new Error(`Could not create directory: ${error.message}`)
-    }
-  }
+      if (next) {
+        try {
+          fs.mkdirSync(next, { recursive: true })
+        } catch (error) {
+          throw new Error(`Could not create directory: ${error.message}`)
+        }
+      }
 
-  writeDefaultProjectDir(next)
+      writeDefaultProjectDir(next)
 
-  return { dir: next }
-})
+      return { dir: next }
+    })
 
-ipcMain.handle('hermes:setting:defaultProjectDir:pick', async () => {
-  const result = await dialog.showOpenDialog({
-    title: 'Choose default project directory',
-    properties: ['openDirectory', 'createDirectory'],
-    defaultPath: readDefaultProjectDir() || app.getPath('home')
+    ipcMain.handle('hermes:setting:defaultProjectDir:pick', async () => {
+      const result = await dialog.showOpenDialog({
+        title: 'Choose default project directory',
+        properties: ['openDirectory', 'createDirectory'],
+        defaultPath: readDefaultProjectDir() || app.getPath('home')
+      })
+
+      if (result.canceled || result.filePaths.length === 0) {
+        return { canceled: true, dir: null }
+      }
+
+      return { canceled: false, dir: result.filePaths[0] }
+    })
+
+    registerLinkTitleIntegration?.(ipcMain)
+
+    ipcMain.handle('hermes:logs:reveal', async () => {
+      try {
+        await fs.promises.mkdir(path.dirname(DESKTOP_LOG_PATH), { recursive: true })
+
+        if (!fileExists(DESKTOP_LOG_PATH)) {
+          await fs.promises.appendFile(DESKTOP_LOG_PATH, '')
+        }
+
+        shell.showItemInFolder(DESKTOP_LOG_PATH)
+
+        return { ok: true, path: DESKTOP_LOG_PATH }
+      } catch (error) {
+        return { ok: false, path: DESKTOP_LOG_PATH, error: error.message }
+      }
+    })
+
+    ipcMain.handle('hermes:logs:recent', async () => ({ path: DESKTOP_LOG_PATH, lines: hermesLog.slice(-200) }))
   })
-
-  if (result.canceled || result.filePaths.length === 0) {
-    return { canceled: true, dir: null }
-  }
-
-  return { canceled: false, dir: result.filePaths[0] }
-})
-
-registerLinkTitleIntegration?.(ipcMain)
-
-ipcMain.handle('hermes:logs:reveal', async () => {
-  try {
-    await fs.promises.mkdir(path.dirname(DESKTOP_LOG_PATH), { recursive: true })
-
-    if (!fileExists(DESKTOP_LOG_PATH)) {
-      await fs.promises.appendFile(DESKTOP_LOG_PATH, '')
-    }
-
-    shell.showItemInFolder(DESKTOP_LOG_PATH)
-
-    return { ok: true, path: DESKTOP_LOG_PATH }
-  } catch (error) {
-    return { ok: false, path: DESKTOP_LOG_PATH, error: error.message }
-  }
-})
-
-ipcMain.handle('hermes:logs:recent', async () => ({ path: DESKTOP_LOG_PATH, lines: hermesLog.slice(-200) }))
+}
 
 // Renderer error-boundary catches (#79428 defect B): the component stack only
 // exists in renderer memory, so the boundary posts it here and we persist it
@@ -12198,348 +12264,361 @@ function disposeTerminalSession(id) {
   return true
 }
 
-ipcMain.handle('hermes:fs:readDir', async (_event, dirPath) => readDirForIpc(dirPath))
+if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  registerSkuIntegrations?.(() => {
+    ipcMain.handle('hermes:fs:readDir', async (_event, dirPath) => readDirForIpc(dirPath))
 
-ipcMain.handle('hermes:fs:gitRoot', async (_event, startPath) => gitRootForIpc(startPath))
+    ipcMain.handle('hermes:fs:gitRoot', async (_event, startPath) => gitRootForIpc(startPath))
 
-// Reveal a path in the OS file manager (Finder / Explorer / Files).
-ipcMain.handle('hermes:fs:reveal', async (_event, targetPath) => {
-  const target = String(targetPath || '').trim()
+    // Reveal a path in the OS file manager (Finder / Explorer / Files).
+    ipcMain.handle('hermes:fs:reveal', async (_event, targetPath) => {
+      const target = String(targetPath || '').trim()
 
-  if (!target) {
-    return false
-  }
+      if (!target) {
+        return false
+      }
 
-  try {
-    shell.showItemInFolder(target)
+      try {
+        shell.showItemInFolder(target)
 
-    return true
-  } catch {
-    return false
-  }
-})
+        return true
+      } catch {
+        return false
+      }
+    })
 
-// Open a DIRECTORY in the OS file manager, creating it first if needed. Unlike
-// `reveal` (which selects an existing item and silently no-ops on a missing
-// path — the "Open plugins folder" Windows bug), this is for the plugins door,
-// which often doesn't exist on first use. `shell.openPath` returns '' on
-// success or an error string; both mkdir + openPath failures are surfaced.
-ipcMain.handle('hermes:fs:openDir', async (_event, dirPath) => {
-  const dir = String(dirPath || '').trim()
+    // Open a DIRECTORY in the OS file manager, creating it first if needed. Unlike
+    // `reveal` (which selects an existing item and silently no-ops on a missing
+    // path — the "Open plugins folder" Windows bug), this is for the plugins door,
+    // which often doesn't exist on first use. `shell.openPath` returns '' on
+    // success or an error string; both mkdir + openPath failures are surfaced.
+    ipcMain.handle('hermes:fs:openDir', async (_event, dirPath) => {
+      const dir = String(dirPath || '').trim()
 
-  if (!dir) {
-    return { ok: false, error: 'no path' }
-  }
+      if (!dir) {
+        return { ok: false, error: 'no path' }
+      }
 
-  try {
-    await fs.promises.mkdir(dir, { recursive: true })
-    const error = await shell.openPath(path.normalize(dir))
+      try {
+        await fs.promises.mkdir(dir, { recursive: true })
+        const error = await shell.openPath(path.normalize(dir))
 
-    return error ? { ok: false, error } : { ok: true }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
-})
+        return error ? { ok: false, error } : { ok: true }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    })
 
-// The LOCAL Desktop runtime-plugin root: `<HERMES_HOME>/desktop-plugins`,
-// resolved from the main-process HERMES_HOME (see resolveHermesHome) — NOT from
-// the connected backend. A remote backend reports its own `hermes_home` over
-// the gateway, which is a path on the REMOTE box; deriving the plugin dir from
-// it yields `undefined/desktop-plugins` (or a non-existent remote path) and the
-// on-disk plugin door silently breaks (#66899). Electron owns this resolution
-// so it stays valid in every connection mode. Created on demand, like openDir.
-async function localPluginsRoot(dirName: string): Promise<string> {
-  // Profile-aware: a named Desktop profile gets its own plugin root under
-  // profiles/<name>/, matching the profile-scoped hermes_home the backend
-  // reported before this resolver existed. 'default'/unset pins the global root.
-  const profile = readActiveDesktopProfile()
-  const base = profile && profile !== 'default' ? path.join(HERMES_HOME, 'profiles', profile) : HERMES_HOME
-  const dir = path.join(base, dirName)
+    // The LOCAL Desktop runtime-plugin root: `<HERMES_HOME>/desktop-plugins`,
+    // resolved from the main-process HERMES_HOME (see resolveHermesHome) — NOT from
+    // the connected backend. A remote backend reports its own `hermes_home` over
+    // the gateway, which is a path on the REMOTE box; deriving the plugin dir from
+    // it yields `undefined/desktop-plugins` (or a non-existent remote path) and the
+    // on-disk plugin door silently breaks (#66899). Electron owns this resolution
+    // so it stays valid in every connection mode. Created on demand, like openDir.
+    async function localPluginsRoot(dirName: string): Promise<string> {
+      // Profile-aware: a named Desktop profile gets its own plugin root under
+      // profiles/<name>/, matching the profile-scoped hermes_home the backend
+      // reported before this resolver existed. 'default'/unset pins the global root.
+      const profile = readActiveDesktopProfile()
+      const base = profile && profile !== 'default' ? path.join(HERMES_HOME, 'profiles', profile) : HERMES_HOME
+      const dir = path.join(base, dirName)
 
-  try {
-    await fs.promises.mkdir(dir, { recursive: true })
-  } catch {
-    // Best-effort create; return the path regardless so the reveal action can
-    // still surface a real openPath error and the scanner can retry later.
-  }
+      try {
+        await fs.promises.mkdir(dir, { recursive: true })
+      } catch {
+        // Best-effort create; return the path regardless so the reveal action can
+        // still surface a real openPath error and the scanner can retry later.
+      }
 
-  return dir
-}
-
-ipcMain.handle('hermes:fs:desktopPluginsRoot', async () => localPluginsRoot('desktop-plugins'))
-
-// The LOCAL agent-plugin root (`<HERMES_HOME>/plugins`), same Electron-local
-// resolution as above. This is the desktop half of a UNIFIED plugin package:
-// an agent plugin may ship `desktop/plugin.js` alongside its Python code (the
-// same shape as `dashboard/manifest.json`), and the renderer's disk door scans
-// this root for it — one installable folder serving both SDKs.
-ipcMain.handle('hermes:fs:agentPluginsRoot', async () => localPluginsRoot('plugins'))
-
-// Rename a file/folder in place. The renderer passes the existing path + a new
-// base name; the destination is resolved in the SAME parent dir so a rename can
-// never move the item elsewhere or traverse out. Rejects on a name collision.
-ipcMain.handle('hermes:fs:rename', async (_event, targetPath, newName) => {
-  const src = String(targetPath || '').trim()
-  const name = String(newName || '').trim()
-
-  if (!src || !name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
-    throw new Error('Invalid rename')
-  }
-
-  const dst = path.join(path.dirname(src), name)
-
-  if (dst === src) {
-    return { path: dst }
-  }
-
-  if (fs.existsSync(dst)) {
-    throw new Error(`"${name}" already exists`)
-  }
-
-  await fs.promises.rename(src, dst)
-
-  return { path: dst }
-})
-
-// Write a small UTF-8 text file (e.g. a project's IDEA.md at creation). The path
-// is hardened (resolveRequestedPathForIpc) and the parent must already exist —
-// this never creates directory trees or escapes the allowed roots, and content
-// is size-capped so it can't be abused as a bulk-write primitive.
-ipcMain.handle('hermes:fs:writeText', async (_event, filePath, content) => {
-  const raw = String(filePath || '').trim()
-
-  if (!raw) {
-    throw new Error('Invalid path')
-  }
-
-  const text = String(content ?? '')
-
-  if (text.length > 1_000_000) {
-    throw new Error('Content too large')
-  }
-
-  const resolved = resolveRequestedPathForIpc(expandUserPath(raw), { purpose: 'Write text file' })
-
-  if (!directoryExists(path.dirname(resolved))) {
-    throw new Error('Parent directory does not exist')
-  }
-
-  await fs.promises.writeFile(resolved, text, 'utf8')
-
-  return { path: resolved }
-})
-
-// Move a file/folder to the OS trash (recoverable) — the VS Code "Delete"
-// default. `shell.trashItem` routes to Finder/Explorer/Files trash per platform.
-ipcMain.handle('hermes:fs:trash', async (_event, targetPath) => {
-  const target = String(targetPath || '').trim()
-
-  if (!target) {
-    throw new Error('Invalid delete')
-  }
-
-  await shell.trashItem(target)
-
-  return true
-})
-
-// Git-driven worktree management ("Start work" flow). Errors surface to the
-// renderer as rejected promises so it can toast a friendly message.
-ipcMain.handle('hermes:git:worktreeList', async (_event, repoPath) => listWorktrees(repoPath, resolveGitBinary()))
-
-ipcMain.handle('hermes:git:worktreeAdd', async (_event, repoPath, options) =>
-  addWorktree(repoPath, options || {}, resolveGitBinary())
-)
-
-ipcMain.handle('hermes:git:worktreeRemove', async (_event, repoPath, worktreePath, options) =>
-  removeWorktree(repoPath, worktreePath, options || {}, resolveGitBinary())
-)
-
-ipcMain.handle('hermes:git:branchSwitch', async (_event, repoPath, branch) =>
-  switchBranch(repoPath, branch, resolveGitBinary())
-)
-
-ipcMain.handle('hermes:git:branchList', async (_event, repoPath) => listBranches(repoPath, resolveGitBinary()))
-
-ipcMain.handle('hermes:git:baseBranchList', async (_event, repoPath) => listBaseBranches(repoPath, resolveGitBinary()))
-
-// Compact repo status (branch, ahead/behind, change counts + files) for the
-// composer coding rail. Returns null on a non-repo / remote backend so the rail
-// hides cleanly rather than erroring.
-ipcMain.handle('hermes:git:repoStatus', async (_event, repoPath) => repoStatus(repoPath, resolveGitBinary()))
-
-// Codex-style review pane: list changed files for a scope, fetch one file's
-// unified diff, and stage / unstage / revert. Reads return empty on failure;
-// mutations reject so the renderer can toast.
-ipcMain.handle('hermes:git:review:list', async (_event, repoPath, scope, baseRef) =>
-  reviewList(repoPath, scope, baseRef, resolveGitBinary())
-)
-ipcMain.handle('hermes:git:review:diff', async (_event, repoPath, filePath, scope, baseRef, staged) =>
-  reviewDiff(repoPath, filePath, scope, baseRef, staged, resolveGitBinary())
-)
-// Working-tree-vs-HEAD diff for one file (the preview's "show the diff" view).
-ipcMain.handle('hermes:git:fileDiff', async (_event, repoPath, filePath) =>
-  fileDiffVsHead(repoPath, filePath, resolveGitBinary())
-)
-ipcMain.handle('hermes:git:review:stage', async (_event, repoPath, filePath) =>
-  reviewStage(repoPath, filePath ?? null, resolveGitBinary())
-)
-ipcMain.handle('hermes:git:review:unstage', async (_event, repoPath, filePath) =>
-  reviewUnstage(repoPath, filePath ?? null, resolveGitBinary())
-)
-ipcMain.handle('hermes:git:review:revert', async (_event, repoPath, filePath) =>
-  reviewRevert(repoPath, filePath ?? null, resolveGitBinary())
-)
-ipcMain.handle('hermes:git:review:revParse', async (_event, repoPath, ref) =>
-  reviewRevParse(repoPath, ref, resolveGitBinary())
-)
-ipcMain.handle('hermes:git:review:commit', async (_event, repoPath, message, push) =>
-  reviewCommit(repoPath, message, Boolean(push), resolveGitBinary())
-)
-ipcMain.handle('hermes:git:review:commitContext', async (_event, repoPath) =>
-  reviewCommitContext(repoPath, resolveGitBinary())
-)
-ipcMain.handle('hermes:git:review:push', async (_event, repoPath) => reviewPush(repoPath, resolveGitBinary()))
-ipcMain.handle('hermes:git:review:shipInfo', async (_event, repoPath) => reviewShipInfo(repoPath, resolveGhBinary()))
-ipcMain.handle('hermes:git:review:prList', async (_event, repoPath, branches, numbers) =>
-  reviewPrList(repoPath, resolveGhBinary(), branches, numbers)
-)
-ipcMain.handle('hermes:git:review:fetchPrComment', async (_event, repoPath, url) =>
-  reviewFetchPrComment(repoPath, resolveGhBinary(), url)
-)
-ipcMain.handle('hermes:git:review:createPr', async (_event, repoPath) =>
-  reviewCreatePr(repoPath, resolveGitBinary(), resolveGhBinary())
-)
-
-// Repo-first project discovery: scan bounded roots for git repos (pure fs walk,
-// no native addon). Never throws to the renderer — failures yield an empty list.
-ipcMain.handle('hermes:git:scanRepos', async (_event, roots, options) => {
-  try {
-    return await scanGitRepos(roots || [], options || {})
-  } catch {
-    return []
-  }
-})
-
-// node-pty's published tarball ships the POSIX `spawn-helper` without an exec
-// bit; the dev flow resolves node-pty straight from node_modules (nothing
-// chmods it there), so the first terminal spawn dies with `posix_spawnp
-// failed`. Restore the bit once, lazily, right before the first spawn. Packaged
-// builds already stage an executable copy, so this is a no-op there.
-let _spawnHelperEnsured = false
-
-function ensureNodePtySpawnHelper() {
-  if (_spawnHelperEnsured || IS_WINDOWS) {
-    return
-  }
-
-  _spawnHelperEnsured = true
-
-  try {
-    const nodePtyRoot = path.dirname(require.resolve('node-pty/package.json'))
-    const { fixed, errors } = ensureSpawnHelperExecutable(nodePtyRoot)
-
-    for (const helperPath of fixed) {
-      rememberLog(`[terminal] restored +x on node-pty spawn-helper: ${helperPath}`)
+      return dir
     }
 
-    for (const failure of errors) {
-      rememberLog(`[terminal] could not chmod spawn-helper ${failure.path}: ${failure.error}`)
+    ipcMain.handle('hermes:fs:desktopPluginsRoot', async () => localPluginsRoot('desktop-plugins'))
+
+    // The LOCAL agent-plugin root (`<HERMES_HOME>/plugins`), same Electron-local
+    // resolution as above. This is the desktop half of a UNIFIED plugin package:
+    // an agent plugin may ship `desktop/plugin.js` alongside its Python code (the
+    // same shape as `dashboard/manifest.json`), and the renderer's disk door scans
+    // this root for it — one installable folder serving both SDKs.
+    ipcMain.handle('hermes:fs:agentPluginsRoot', async () => localPluginsRoot('plugins'))
+
+    // Rename a file/folder in place. The renderer passes the existing path + a new
+    // base name; the destination is resolved in the SAME parent dir so a rename can
+    // never move the item elsewhere or traverse out. Rejects on a name collision.
+    ipcMain.handle('hermes:fs:rename', async (_event, targetPath, newName) => {
+      const src = String(targetPath || '').trim()
+      const name = String(newName || '').trim()
+
+      if (!src || !name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
+        throw new Error('Invalid rename')
+      }
+
+      const dst = path.join(path.dirname(src), name)
+
+      if (dst === src) {
+        return { path: dst }
+      }
+
+      if (fs.existsSync(dst)) {
+        throw new Error(`"${name}" already exists`)
+      }
+
+      await fs.promises.rename(src, dst)
+
+      return { path: dst }
+    })
+
+    // Write a small UTF-8 text file (e.g. a project's IDEA.md at creation). The path
+    // is hardened (resolveRequestedPathForIpc) and the parent must already exist —
+    // this never creates directory trees or escapes the allowed roots, and content
+    // is size-capped so it can't be abused as a bulk-write primitive.
+    ipcMain.handle('hermes:fs:writeText', async (_event, filePath, content) => {
+      const raw = String(filePath || '').trim()
+
+      if (!raw) {
+        throw new Error('Invalid path')
+      }
+
+      const text = String(content ?? '')
+
+      if (text.length > 1_000_000) {
+        throw new Error('Content too large')
+      }
+
+      const resolved = resolveRequestedPathForIpc(expandUserPath(raw), { purpose: 'Write text file' })
+
+      if (!directoryExists(path.dirname(resolved))) {
+        throw new Error('Parent directory does not exist')
+      }
+
+      await fs.promises.writeFile(resolved, text, 'utf8')
+
+      return { path: resolved }
+    })
+
+    // Move a file/folder to the OS trash (recoverable) — the VS Code "Delete"
+    // default. `shell.trashItem` routes to Finder/Explorer/Files trash per platform.
+    ipcMain.handle('hermes:fs:trash', async (_event, targetPath) => {
+      const target = String(targetPath || '').trim()
+
+      if (!target) {
+        throw new Error('Invalid delete')
+      }
+
+      await shell.trashItem(target)
+
+      return true
+    })
+
+    // Git-driven worktree management ("Start work" flow). Errors surface to the
+    // renderer as rejected promises so it can toast a friendly message.
+    ipcMain.handle('hermes:git:worktreeList', async (_event, repoPath) => listWorktrees(repoPath, resolveGitBinary()))
+
+    ipcMain.handle('hermes:git:worktreeAdd', async (_event, repoPath, options) =>
+      addWorktree(repoPath, options || {}, resolveGitBinary())
+    )
+
+    ipcMain.handle('hermes:git:worktreeRemove', async (_event, repoPath, worktreePath, options) =>
+      removeWorktree(repoPath, worktreePath, options || {}, resolveGitBinary())
+    )
+
+    ipcMain.handle('hermes:git:branchSwitch', async (_event, repoPath, branch) =>
+      switchBranch(repoPath, branch, resolveGitBinary())
+    )
+
+    ipcMain.handle('hermes:git:branchList', async (_event, repoPath) => listBranches(repoPath, resolveGitBinary()))
+
+    ipcMain.handle('hermes:git:baseBranchList', async (_event, repoPath) =>
+      listBaseBranches(repoPath, resolveGitBinary())
+    )
+
+    // Compact repo status (branch, ahead/behind, change counts + files) for the
+    // composer coding rail. Returns null on a non-repo / remote backend so the rail
+    // hides cleanly rather than erroring.
+    ipcMain.handle('hermes:git:repoStatus', async (_event, repoPath) => repoStatus(repoPath, resolveGitBinary()))
+
+    // Codex-style review pane: list changed files for a scope, fetch one file's
+    // unified diff, and stage / unstage / revert. Reads return empty on failure;
+    // mutations reject so the renderer can toast.
+    ipcMain.handle('hermes:git:review:list', async (_event, repoPath, scope, baseRef) =>
+      reviewList(repoPath, scope, baseRef, resolveGitBinary())
+    )
+    ipcMain.handle('hermes:git:review:diff', async (_event, repoPath, filePath, scope, baseRef, staged) =>
+      reviewDiff(repoPath, filePath, scope, baseRef, staged, resolveGitBinary())
+    )
+    // Working-tree-vs-HEAD diff for one file (the preview's "show the diff" view).
+    ipcMain.handle('hermes:git:fileDiff', async (_event, repoPath, filePath) =>
+      fileDiffVsHead(repoPath, filePath, resolveGitBinary())
+    )
+    ipcMain.handle('hermes:git:review:stage', async (_event, repoPath, filePath) =>
+      reviewStage(repoPath, filePath ?? null, resolveGitBinary())
+    )
+    ipcMain.handle('hermes:git:review:unstage', async (_event, repoPath, filePath) =>
+      reviewUnstage(repoPath, filePath ?? null, resolveGitBinary())
+    )
+    ipcMain.handle('hermes:git:review:revert', async (_event, repoPath, filePath) =>
+      reviewRevert(repoPath, filePath ?? null, resolveGitBinary())
+    )
+    ipcMain.handle('hermes:git:review:revParse', async (_event, repoPath, ref) =>
+      reviewRevParse(repoPath, ref, resolveGitBinary())
+    )
+    ipcMain.handle('hermes:git:review:commit', async (_event, repoPath, message, push) =>
+      reviewCommit(repoPath, message, Boolean(push), resolveGitBinary())
+    )
+    ipcMain.handle('hermes:git:review:commitContext', async (_event, repoPath) =>
+      reviewCommitContext(repoPath, resolveGitBinary())
+    )
+    ipcMain.handle('hermes:git:review:push', async (_event, repoPath) => reviewPush(repoPath, resolveGitBinary()))
+    ipcMain.handle('hermes:git:review:shipInfo', async (_event, repoPath) =>
+      reviewShipInfo(repoPath, resolveGhBinary())
+    )
+    ipcMain.handle('hermes:git:review:prList', async (_event, repoPath, branches, numbers) =>
+      reviewPrList(repoPath, resolveGhBinary(), branches, numbers)
+    )
+    ipcMain.handle('hermes:git:review:fetchPrComment', async (_event, repoPath, url) =>
+      reviewFetchPrComment(repoPath, resolveGhBinary(), url)
+    )
+    ipcMain.handle('hermes:git:review:createPr', async (_event, repoPath) =>
+      reviewCreatePr(repoPath, resolveGitBinary(), resolveGhBinary())
+    )
+
+    // Repo-first project discovery: scan bounded roots for git repos (pure fs walk,
+    // no native addon). Never throws to the renderer — failures yield an empty list.
+    ipcMain.handle('hermes:git:scanRepos', async (_event, roots, options) => {
+      try {
+        return await scanGitRepos(roots || [], options || {})
+      } catch {
+        return []
+      }
+    })
+
+    // node-pty's published tarball ships the POSIX `spawn-helper` without an exec
+    // bit; the dev flow resolves node-pty straight from node_modules (nothing
+    // chmods it there), so the first terminal spawn dies with `posix_spawnp
+    // failed`. Restore the bit once, lazily, right before the first spawn. Packaged
+    // builds already stage an executable copy, so this is a no-op there.
+    let _spawnHelperEnsured = false
+
+    function ensureNodePtySpawnHelper() {
+      if (_spawnHelperEnsured || IS_WINDOWS) {
+        return
+      }
+
+      _spawnHelperEnsured = true
+
+      try {
+        const nodePtyRoot = path.dirname(require.resolve('node-pty/package.json'))
+        const { fixed, errors } = ensureSpawnHelperExecutable(nodePtyRoot)
+
+        for (const helperPath of fixed) {
+          rememberLog(`[terminal] restored +x on node-pty spawn-helper: ${helperPath}`)
+        }
+
+        for (const failure of errors) {
+          rememberLog(`[terminal] could not chmod spawn-helper ${failure.path}: ${failure.error}`)
+        }
+      } catch (error) {
+        rememberLog(
+          `[terminal] spawn-helper exec check skipped: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
     }
-  } catch (error) {
-    rememberLog(`[terminal] spawn-helper exec check skipped: ${error instanceof Error ? error.message : String(error)}`)
-  }
-}
 
-ipcMain.handle('hermes:terminal:start', async (event, payload = {}) => {
-  ensureNodePtySpawnHelper()
+    ipcMain.handle('hermes:terminal:start', async (event, payload = {}) => {
+      ensureNodePtySpawnHelper()
 
-  const id = crypto.randomUUID()
-  const { args, command, name } = terminalShellCommand()
-  const cwd = safeTerminalCwd(payload?.cwd)
-  const cols = Math.max(2, Number.parseInt(String(payload?.cols || 80), 10) || 80)
-  const rows = Math.max(2, Number.parseInt(String(payload?.rows || 24), 10) || 24)
+      const id = crypto.randomUUID()
+      const { args, command, name } = terminalShellCommand()
+      const cwd = safeTerminalCwd(payload?.cwd)
+      const cols = Math.max(2, Number.parseInt(String(payload?.cols || 80), 10) || 80)
+      const rows = Math.max(2, Number.parseInt(String(payload?.rows || 24), 10) || 24)
 
-  const sshTarget = await resolveTerminalConnection(activeSshTerminalTarget, () => ensureBackend(primaryProfileKey()))
-  const remote = Boolean(sshTarget)
-  const remoteState = remote ? sshConnections.get(sshTarget.scope) : null
-
-  const remoteCommand =
-    remoteState?.remotePlatform === 'Windows'
-      ? buildWindowsInteractiveCommand(String(payload?.cwd || '').trim())
-      : undefined
-
-  const ptyProcess = remote
-    ? nodePty.spawn(
-        process.platform === 'win32'
-          ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe')
-          : 'ssh',
-        buildInteractiveSshArgs(sshTarget.ssh, String(payload?.cwd || '').trim(), undefined, remoteCommand),
-        { cols, cwd: app.getPath('home'), env: terminalShellEnv(), name: 'xterm-256color', rows }
+      const sshTarget = await resolveTerminalConnection(activeSshTerminalTarget, () =>
+        ensureBackend(primaryProfileKey())
       )
-    : nodePty.spawn(command, args, { cols, cwd, env: terminalShellEnv(), name: 'xterm-256color', rows })
 
-  terminalSessions.set(id, {
-    pty: ptyProcess,
-    webContentsId: event.sender.id,
-    ...(remote ? { sshScope: sshTarget.scope, remoteCwd: String(payload?.cwd || '') } : {})
+      const remote = Boolean(sshTarget)
+      const remoteState = remote ? sshConnections.get(sshTarget.scope) : null
+
+      const remoteCommand =
+        remoteState?.remotePlatform === 'Windows'
+          ? buildWindowsInteractiveCommand(String(payload?.cwd || '').trim())
+          : undefined
+
+      const ptyProcess = remote
+        ? spawnPty(
+            process.platform === 'win32'
+              ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe')
+              : 'ssh',
+            buildInteractiveSshArgs(sshTarget.ssh, String(payload?.cwd || '').trim(), undefined, remoteCommand),
+            { cols, cwd: app.getPath('home'), env: terminalShellEnv(), name: 'xterm-256color', rows }
+          )
+        : spawnPty(command, args, { cols, cwd, env: terminalShellEnv(), name: 'xterm-256color', rows })
+
+      terminalSessions.set(id, {
+        pty: ptyProcess,
+        webContentsId: event.sender.id,
+        ...(remote ? { sshScope: sshTarget.scope, remoteCwd: String(payload?.cwd || '') } : {})
+      })
+
+      const send = (suffix, payload) => {
+        if (event.sender.isDestroyed()) {
+          return
+        }
+
+        event.sender.send(terminalChannel(id, suffix), payload)
+      }
+
+      ptyProcess.onData(data => send('data', data))
+      ptyProcess.onExit(({ exitCode, signal }) => {
+        terminalSessions.delete(id)
+        send('exit', { code: exitCode, signal: signal || null })
+      })
+      event.sender.once('destroyed', () => disposeTerminalSession(id))
+
+      return { cwd: remote ? null : cwd, id, shell: remote ? 'ssh' : name }
+    })
+
+    ipcMain.handle('hermes:terminal:write', (_event, id, data) => {
+      const sessionInfo = terminalSessions.get(String(id || ''))
+
+      if (!sessionInfo) {
+        return false
+      }
+
+      sessionInfo.pty.write(String(data || ''))
+
+      return true
+    })
+
+    ipcMain.handle('hermes:terminal:resize', (_event, id, size = {}) => {
+      const sessionInfo = terminalSessions.get(String(id || ''))
+
+      if (!sessionInfo) {
+        return false
+      }
+
+      const cols = Math.max(2, Number.parseInt(String(size?.cols || 80), 10) || 80)
+      const rows = Math.max(2, Number.parseInt(String(size?.rows || 24), 10) || 24)
+
+      sessionInfo.pty.resize(cols, rows)
+
+      return true
+    })
+    ipcMain.handle('hermes:terminal:cwd', async (_event, id) => {
+      const sessionInfo = terminalSessions.get(String(id || ''))
+
+      if (!sessionInfo) {
+        return null
+      }
+
+      return sessionInfo.sshScope !== undefined ? null : readProcessCwd(sessionInfo.pty.pid)
+    })
+
+    ipcMain.handle('hermes:terminal:dispose', (_event, id) => disposeTerminalSession(String(id || '')))
   })
-
-  const send = (suffix, payload) => {
-    if (event.sender.isDestroyed()) {
-      return
-    }
-
-    event.sender.send(terminalChannel(id, suffix), payload)
-  }
-
-  ptyProcess.onData(data => send('data', data))
-  ptyProcess.onExit(({ exitCode, signal }) => {
-    terminalSessions.delete(id)
-    send('exit', { code: exitCode, signal: signal || null })
-  })
-  event.sender.once('destroyed', () => disposeTerminalSession(id))
-
-  return { cwd: remote ? null : cwd, id, shell: remote ? 'ssh' : name }
-})
-
-ipcMain.handle('hermes:terminal:write', (_event, id, data) => {
-  const sessionInfo = terminalSessions.get(String(id || ''))
-
-  if (!sessionInfo) {
-    return false
-  }
-
-  sessionInfo.pty.write(String(data || ''))
-
-  return true
-})
-
-ipcMain.handle('hermes:terminal:resize', (_event, id, size = {}) => {
-  const sessionInfo = terminalSessions.get(String(id || ''))
-
-  if (!sessionInfo) {
-    return false
-  }
-
-  const cols = Math.max(2, Number.parseInt(String(size?.cols || 80), 10) || 80)
-  const rows = Math.max(2, Number.parseInt(String(size?.rows || 24), 10) || 24)
-
-  sessionInfo.pty.resize(cols, rows)
-
-  return true
-})
-ipcMain.handle('hermes:terminal:cwd', async (_event, id) => {
-  const sessionInfo = terminalSessions.get(String(id || ''))
-
-  if (!sessionInfo) {
-    return null
-  }
-
-  return sessionInfo.sshScope !== undefined ? null : readProcessCwd(sessionInfo.pty.pid)
-})
-
-ipcMain.handle('hermes:terminal:dispose', (_event, id) => disposeTerminalSession(String(id || '')))
+}
 
 if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
   registerSkuIntegrations?.(() => {
@@ -13013,7 +13092,13 @@ app.whenReady().then(() => {
   }
 
   installMediaPermissions()
-  registerMediaProtocol()
+
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    registerKorgoRendererProtocol(protocol, path.dirname(resolveRendererIndex()))
+  } else {
+    registerMediaProtocol()
+  }
+
   installEmbedReferer()
   registerDeepLinkProtocol()
   ensureWslWindowsFonts()

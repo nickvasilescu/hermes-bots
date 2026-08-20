@@ -1,7 +1,7 @@
+import type { ChatSidebar } from '@desktop/chat-sidebar'
 import type { ComponentProps, ReactNode } from 'react'
 
 import type { ChatView } from '../chat'
-import type { ChatSidebar } from '../chat/sidebar'
 import type { CommandCenterSection } from '../command-center'
 import type { useGatewayRequest } from '../gateway/hooks/use-gateway-request'
 import type { ModelMenuPanel } from '../shell/model-menu-panel'

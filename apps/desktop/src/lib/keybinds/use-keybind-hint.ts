@@ -1,9 +1,9 @@
+import { KEYBIND_READONLY } from '@desktop/keybind-actions'
 import { useStore } from '@nanostores/react'
 
 import { $registryVersion } from '@/contrib/registry'
 import { $bindings, bindingsFor } from '@/store/keybinds'
 
-import { KEYBIND_READONLY } from './actions'
 import { formatCombo } from './combo'
 
 // The formatted first combo for `actionId`, or null when unbound. Rebindable

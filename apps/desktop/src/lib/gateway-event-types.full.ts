@@ -1,0 +1,21 @@
+export const UNSCOPED_STREAM_EVENT_TYPES = [
+  'approval.request',
+  'browser.progress',
+  'clarify.request',
+  'error',
+  'mcp.setup.request',
+  'message.complete',
+  'message.delta',
+  'message.interim',
+  'message.start',
+  'reasoning.available',
+  'reasoning.delta',
+  'secret.request',
+  'status.update',
+  'sudo.request',
+  'thinking.delta',
+  'tool.complete',
+  'tool.generating',
+  'tool.progress',
+  'tool.start'
+] as const

@@ -1,3 +1,4 @@
+import { getLogs } from '@desktop/logs-client'
 import { useStore } from '@nanostores/react'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -16,7 +17,6 @@ import { Tip } from '@/components/ui/tooltip'
 import {
   authMcpServer,
   getActionStatus,
-  getLogs,
   getMcpCatalog,
   getMcpOAuthFlow,
   type HermesGateway,

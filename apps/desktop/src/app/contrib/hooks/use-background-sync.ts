@@ -1,3 +1,4 @@
+import { getProjectConfig } from '@desktop/project-config-client'
 import { useStore } from '@nanostores/react'
 import { useEffect } from 'react'
 
@@ -256,7 +257,7 @@ export function useBackgroundSync({
     const cwd = $currentCwd.get().trim()
 
     if (!$activeSessionId.get() && cwd && !/^(\/|[A-Za-z]:[\\/])/.test(cwd)) {
-      void requestGateway<{ cwd?: string }>('config.get', { key: 'project', cwd })
+      void getProjectConfig(requestGateway, cwd)
         .then(info => {
           if (info.cwd && !$activeSessionId.get()) {
             setCurrentCwd(info.cwd)

@@ -1,3 +1,5 @@
+import { contributedKeybindHandler, PROFILE_SLOT_COUNT, SESSION_SLOT_COUNT } from '@desktop/keybind-actions'
+import { requestProfileCreateAction } from '@desktop/profile-create-action'
 import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router'
 
@@ -14,7 +16,6 @@ import {
 } from '@/components/pane-shell/tree/store'
 import { onReleaseTypingFocus } from '@/components/ui/keyboard-first'
 import { findBarClaimsCombo } from '@/lib/find-in-page'
-import { contributedKeybindHandler, PROFILE_SLOT_COUNT, SESSION_SLOT_COUNT } from '@/lib/keybinds/actions'
 import { comboAllowedInInput, comboFromEvent, isEditableTarget } from '@/lib/keybinds/combo'
 import { composerFocusKeysAllowed, isComposerFocusSoftCombo, typeToFocusChar } from '@/lib/keybinds/composer-focus-keys'
 import { keybindActionAllowed } from '@/lib/keybinds/context-claim'
@@ -38,7 +39,6 @@ import {
 import {
   $newChatProfile,
   cycleProfile,
-  requestProfileCreate,
   switchProfileToSlot,
   switchToDefaultProfile,
   toggleShowAllProfiles
@@ -270,7 +270,7 @@ export function useKeybinds(deps: KeybindRuntimeDeps): void {
     'profile.next': () => cycleProfile(1),
     'profile.prev': () => cycleProfile(-1),
     'profile.toggleAll': toggleShowAllProfiles,
-    'profile.create': requestProfileCreate
+    'profile.create': requestProfileCreateAction
   }
 
   // A keyboard-driven overlay closing hands typing back to the composer: Radix

@@ -15,7 +15,22 @@ import {
   isBotProviderSetupReady,
   markBotProviderSetupComplete
 } from '@desktop/bot-setup-overlay'
+import { CommandPalette } from '@desktop/command-palette'
+import { FloatingPet } from '@desktop/floating-pet'
 import { DesktopInstallOverlay } from '@desktop/install-overlay'
+import { closeAllTerminals, FileActionDialogs, RemoteFolderPicker, resetProjectTreeState } from '@desktop/local-file-surfaces'
+import { $restartPreviewServer, useTitlebarToolContributions } from '@desktop/local-panes'
+import { DesktopOnboardingOverlay } from '@desktop/onboarding-overlay'
+import { PersistentTerminal } from '@desktop/persistent-terminal'
+import { PetGenerateOverlay } from '@desktop/pet-generate-overlay'
+import { runSidebarCronJob } from '@desktop/trigger-cron-job'
+import { UpdatesOverlay } from '@desktop/updates-overlay'
+import { useComposerActions } from '@desktop/use-composer-actions'
+import { useCwdActions } from '@desktop/use-cwd-actions'
+import { useHermesConfig } from '@desktop/use-hermes-config'
+import { useKeybinds } from '@desktop/use-keybinds'
+import { usePetBridge } from '@desktop/use-pet-bridge'
+import { usePreviewRouting } from '@desktop/use-preview-routing'
 import { useStore } from '@nanostores/react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
@@ -35,12 +50,10 @@ import { formatRefValue } from '@/components/assistant-ui/directive-text'
 import { FindBar } from '@/components/find-bar'
 import { GatewayConnectingOverlay } from '@/components/gateway-connecting-overlay'
 import { NotificationStack } from '@/components/notifications'
-import { DesktopOnboardingOverlay } from '@/components/onboarding'
 import { $newSessionTabAction, registerPaneCloser } from '@/components/pane-shell/tree/store'
-import { FloatingPet } from '@/components/pet/floating-pet'
 import { RemoteDisplayBanner } from '@/components/remote-display-banner'
 import { emitGatewayEvent } from '@/contrib/events'
-import { getLatestSessionMessages, triggerCronJob } from '@/hermes'
+import { getLatestSessionMessages } from '@/hermes'
 import { type ChatMessage, chatMessageText, preserveLocalAssistantErrors, toChatMessages } from '@/lib/chat-messages'
 import { isBotProduct } from '@/lib/product'
 import { allowsDesktopCapability } from '@/lib/product-capabilities'
@@ -90,21 +103,12 @@ import { useSkinCommand } from '@/themes/use-skin-command'
 
 import { closeWorkspaceTab } from '../chat/close-tab'
 import { requestComposerInsert } from '../chat/composer/focus'
-import { useComposerActions } from '../chat/hooks/use-composer-actions'
-import { CommandPalette } from '../command-palette'
 import { useGatewayBoot } from '../gateway/hooks/use-gateway-boot'
 import { useGatewayRequest } from '../gateway/hooks/use-gateway-request'
-import { useKeybinds } from '../hooks/use-keybinds'
 import { useHudHandoff } from '../hud/handoff'
 import { ModelPickerOverlay } from '../model-picker-overlay'
 import { ModelVisibilityOverlay } from '../model-visibility-overlay'
 import { mainChatOccupied, openSession } from '../open-session'
-import { PetGenerateOverlay } from '../pet-generate/pet-generate-overlay'
-import { FileActionDialogs } from '../right-sidebar/file-actions'
-import { RemoteFolderPicker } from '../right-sidebar/files/remote-picker'
-import { resetProjectTreeState } from '../right-sidebar/files/use-project-tree'
-import { PersistentTerminal } from '../right-sidebar/terminal/persistent'
-import { closeAllTerminals } from '../right-sidebar/terminal/terminals'
 import {
   CRON_ROUTE,
   navigateToWorkspacePage,
@@ -117,11 +121,8 @@ import { SessionPickerOverlay } from '../session-picker-overlay'
 import { SessionSwitcher } from '../session-switcher'
 import { useBackgroundQueueDrain } from '../session/hooks/use-background-queue-drain'
 import { useContextSuggestions } from '../session/hooks/use-context-suggestions'
-import { useCwdActions } from '../session/hooks/use-cwd-actions'
-import { useHermesConfig } from '../session/hooks/use-hermes-config'
 import { useMessageStream } from '../session/hooks/use-message-stream'
 import { useModelControls } from '../session/hooks/use-model-controls'
-import { usePreviewRouting } from '../session/hooks/use-preview-routing'
 import { usePromptActions } from '../session/hooks/use-prompt-actions'
 import { useRouteResume } from '../session/hooks/use-route-resume'
 import { useSessionActions } from '../session/hooks/use-session-actions'
@@ -137,15 +138,12 @@ import {
   titlebarToolsWidthCss
 } from '../shell/titlebar'
 import { TitlebarControls } from '../shell/titlebar-controls'
-import { UpdatesOverlay } from '../updates-overlay'
 
 import { ContribWiringContext } from './context'
 import { useBackgroundSync } from './hooks/use-background-sync'
 import { useDesktopIntegrations } from './hooks/use-desktop-integrations'
-import { usePetBridge } from './hooks/use-pet-bridge'
 import { useQuickEntryBridge } from './hooks/use-quick-entry-bridge'
 import { useSessionTileDelegate } from './hooks/use-session-tile-delegate'
-import { $restartPreviewServer, useTitlebarToolContributions } from './panes'
 import { ChatRoutesSurface, SidebarSurface, StatusbarSurface, TerminalSurface } from './surfaces'
 import type { WiringActions, WiringApi } from './types'
 
@@ -153,12 +151,16 @@ import type { WiringActions, WiringApi } from './types'
 // The workspace-route full-page views (skills/messaging/artifacts) are the
 // ChatRoutesSurface's and live in ./surfaces.
 const AgentsView = lazy(async () => ({ default: (await import('../agents')).AgentsView }))
-const CommandCenterView = lazy(async () => ({ default: (await import('../command-center')).CommandCenterView }))
-const CronView = lazy(async () => ({ default: (await import('../cron')).CronView }))
-const WebhooksView = lazy(async () => ({ default: (await import('../webhooks')).WebhooksView }))
-const ProfilesView = lazy(async () => ({ default: (await import('../profiles')).ProfilesView }))
+
+const CommandCenterView = lazy(async () => ({
+  default: (await import('@desktop/command-center-view')).CommandCenterView
+}))
+
+const CronView = lazy(async () => ({ default: (await import('@desktop/cron-view')).CronView }))
+const WebhooksView = lazy(async () => ({ default: (await import('@desktop/webhooks-view')).WebhooksView }))
+const ProfilesView = lazy(async () => ({ default: (await import('@desktop/profiles-view')).ProfilesView }))
 const SettingsView = lazy(async () => ({ default: (await import('@desktop/settings')).SettingsView }))
-const StarmapView = lazy(async () => ({ default: (await import('../starmap')).StarmapView }))
+const StarmapView = lazy(async () => ({ default: (await import('@desktop/starmap-view')).StarmapView }))
 
 const LOCAL_CREDENTIAL_ENTRY_ALLOWED = allowsDesktopCapability('allowLocalCredentialEntry')
 const LOCAL_RUNTIME_ALLOWED = allowsDesktopCapability('allowLocalRuntime')
@@ -964,9 +966,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     onToggleSelectedPin: toggleSelectedPin,
     onTranscribeAudio: transcribeVoiceAudio,
     onTriggerCronJob: jobId => {
-      void triggerCronJob(jobId)
-        .then(() => refreshCronJobs())
-        .catch(() => undefined)
+      runSidebarCronJob(jobId, refreshCronJobs)
     },
     getGateway: () => gatewayRef.current,
     openAgents,

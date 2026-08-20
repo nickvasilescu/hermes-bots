@@ -126,7 +126,7 @@ describe('wake indicator window controller', () => {
       loadWindowUrl: vi.fn(),
       log: () => {},
       preloadPath: '/tmp/preload.cjs',
-      rendererIndex: () => '/tmp/index.html',
+      rendererUrl: () => 'korgo-app://bundle/index.html',
       wireWindow: vi.fn()
     })
 

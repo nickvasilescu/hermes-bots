@@ -1,3 +1,8 @@
+import { createBrowserSlashActionHandler } from '@desktop/browser-slash-action'
+import { createHandoffSlashActionHandler } from '@desktop/handoff-slash-action'
+import { createJourneySlashActionHandler } from '@desktop/journey-slash-action'
+import { dispatchUnknownSlashCommand } from '@desktop/ssh-slash-dispatch'
+import { createYoloSlashActionHandler } from '@desktop/yolo-slash-action'
 import { skillInvocationText } from '@hermes/shared'
 import { type MutableRefObject, useCallback, useRef } from 'react'
 
@@ -15,7 +20,6 @@ import {
   resolveDesktopCommand
 } from '@/lib/desktop-slash-commands'
 import { isMissingRpcMethod } from '@/lib/gateway-rpc'
-import { setSessionYolo } from '@/lib/yolo-session'
 import { openCommandPalettePage } from '@/store/command-palette'
 import { setComposerDraft } from '@/store/composer'
 import { enqueueQueuedPrompt } from '@/store/composer-queue'
@@ -25,16 +29,13 @@ import { setPetScale } from '@/store/pet-gallery'
 import { $petGenInput, openPetGenerate } from '@/store/pet-generate'
 import { $activeGatewayProfile, $newChatProfile, ensureGatewayProfile, normalizeProfileKey } from '@/store/profile'
 import {
-  $connection,
   $sessions,
-  $yoloActive,
   resolveComposerSessionKey,
   setActiveSessionId,
   setCurrentUsage,
   setModelPickerOpen,
   setSessionPickerOpen,
-  setSessions,
-  setYoloActive
+  setSessions
 } from '@/store/session'
 import { $sessionStates } from '@/store/session-states'
 import {
@@ -48,7 +49,6 @@ import {
 } from '@/store/wake-word'
 
 import type {
-  BrowserManageResponse,
   ClientSessionState,
   SessionCompressResponse,
   SessionTitleResponse,
@@ -474,6 +474,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
       // registry row in desktop-slash-commands.ts plus an entry here — never a
       // new branch in a dispatch ladder.
       const actionHandlers: Record<DesktopActionId, (ctx: SlashActionCtx) => Promise<void>> = {
+        browser: createBrowserSlashActionHandler({ requestGateway, withSlashOutput }),
         new: async () => {
           // Announce the explicit conversation boundary before the route is
           // cleared. Bot-style surfaces use this to allow /new while still
@@ -655,27 +656,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
             compressInFlightRef.current.delete(sessionId)
           }
         },
-        // /yolo maps to the status-bar YOLO control — a per-session approval
-        // bypass, same scope as the TUI's Shift+Tab. With no session yet we arm
-        // it locally; the session-create path applies it on the first message.
-        yolo: async ({ sessionHint }) => {
-          const sid = sessionHint || activeSessionIdRef.current
-          const next = !$yoloActive.get()
-
-          if (!sid) {
-            setYoloActive(next)
-            notify({ kind: 'success', message: next ? copy.yoloArmed : copy.yoloOff })
-
-            return
-          }
-
-          try {
-            const active = await setSessionYolo(requestGateway, sid, next)
-            appendSessionTextMessage(sid, 'system', copy.yoloSystem(active))
-          } catch {
-            notify({ kind: 'error', title: copy.yoloTitle, message: copy.yoloToggleFailed })
-          }
-        },
+        yolo: createYoloSlashActionHandler({ activeSessionIdRef, appendSessionTextMessage, copy, requestGateway }),
         // /wake must stay in the gateway process that owns the Desktop wake
         // lease. Sending it through slash.exec creates a separate HermesCLI in
         // the slash worker, which can claim the machine-wide microphone lock
@@ -741,33 +722,12 @@ export function useSlashCommand(deps: SlashCommandDeps) {
             renderSlashOutput(`error: ${err instanceof Error ? err.message : String(err)}`)
           }
         },
-        // /handoff hands this session to a messaging platform. The platform is
-        // completed inline in the slash popover (backend _handoff_completions),
-        // so there is no overlay: `/handoff <platform>` runs the desktop's own
-        // handoff RPC. cli_only on the backend, so it must not reach slash.exec.
-        handoff: async ({ arg, command, recordInput, sessionHint }) => {
-          const platform = arg.trim()
-
-          if (!platform) {
-            notify({ kind: 'success', message: copy.handoff.pickPlatform })
-
-            return
-          }
-
-          const sid = sessionHint || activeSessionIdRef.current
-
-          if (!sid) {
-            notify({ kind: 'error', title: copy.sessionUnavailable, message: copy.createSessionFailed })
-
-            return
-          }
-
-          const result = await handoffSession(platform, { sessionId: sid })
-
-          if (!result.ok && result.error) {
-            appendSessionTextMessage(sid, 'system', recordInput ? slashStatusText(command, result.error) : result.error)
-          }
-        },
+        handoff: createHandoffSlashActionHandler({
+          activeSessionIdRef,
+          appendSessionTextMessage,
+          copy,
+          handoffSession
+        }),
         // /profile selects which profile new chats open in — no app relaunch.
         // A profile is per-session now, so an existing thread can't change its
         // profile mid-stream; `/profile <name>` points the next new chat (and
@@ -876,13 +836,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
             renderSlashOutput(`error: ${err instanceof Error ? err.message : String(err)}`)
           }
         },
-        // /journey (aliases /learning, /memory-graph) opens the memory graph
-        // overlay — the desktop's visual counterpart of the TUI journey
-        // timeline — instead of printing a text rendering into the transcript.
-        // Args are ignored, matching the TUI overlay behavior.
-        journey: async () => {
-          openMemoryGraph()
-        },
+        journey: createJourneySlashActionHandler(openMemoryGraph),
         // /hatch opens the pet generator overlay (the desktop's rich, multi-step
         // generate→pick→hatch→adopt flow). A typed description seeds the prompt
         // so `/hatch a cyber fox` lands on the composer step prefilled.
@@ -923,81 +877,6 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           }
 
           await runExec(ctx)
-        },
-        // /browser connect|disconnect|status manages the live CDP connection on
-        // the gateway host, mirroring the TUI's browser.manage RPC. It mutates
-        // BROWSER_CDP_URL (and may launch Chrome) in the gateway process — only
-        // meaningful when that process runs on this machine, so it's gated to
-        // local connections. A remote gateway would act on the wrong host.
-        browser: async ctx => {
-          const resolved = await withSlashOutput(ctx)
-
-          if (!resolved) {
-            return
-          }
-
-          const { render: renderSlashOutput, sessionId } = resolved
-
-          if ($connection.get()?.mode === 'remote') {
-            renderSlashOutput(
-              '/browser manages a Chromium-family browser on the gateway host — only available when connected to a local gateway.'
-            )
-
-            return
-          }
-
-          const [rawAction = 'status', ...rest] = ctx.arg.trim().split(/\s+/).filter(Boolean)
-          const cmdAction = rawAction.toLowerCase()
-
-          if (!['connect', 'disconnect', 'status'].includes(cmdAction)) {
-            renderSlashOutput(
-              'usage: /browser [connect|disconnect|status] [url] · persistent: set browser.cdp_url in config.yaml'
-            )
-
-            return
-          }
-
-          const url = cmdAction === 'connect' ? rest.join(' ').trim() || 'http://127.0.0.1:9222' : undefined
-
-          if (url) {
-            renderSlashOutput(`checking Chromium-family browser remote debugging at ${url}...`)
-          }
-
-          try {
-            const result = await requestGateway<BrowserManageResponse>('browser.manage', {
-              action: cmdAction,
-              session_id: sessionId,
-              ...(url && { url })
-            })
-
-            // Without a streamed session subscription, the gateway bundles its
-            // progress lines into `messages` — flush them inline.
-            result?.messages?.forEach(message => renderSlashOutput(message))
-
-            if (cmdAction === 'status') {
-              renderSlashOutput(
-                result?.connected
-                  ? `browser connected: ${result.url || '(url unavailable)'}`
-                  : 'browser not connected (try /browser connect <url> or set browser.cdp_url in config.yaml)'
-              )
-
-              return
-            }
-
-            if (cmdAction === 'disconnect') {
-              renderSlashOutput('browser disconnected')
-
-              return
-            }
-
-            if (result?.connected) {
-              renderSlashOutput('Browser connected to live Chromium-family browser via CDP')
-              renderSlashOutput(`Endpoint: ${result.url || '(url unavailable)'}`)
-              renderSlashOutput('next browser tool call will use this CDP endpoint')
-            }
-          } catch (err) {
-            renderSlashOutput(`error: ${err instanceof Error ? err.message : String(err)}`)
-          }
         }
       }
 
@@ -1095,7 +974,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
 
           default:
             // exec spec, or an unknown skill / quick command the backend owns.
-            return runExec(ctx)
+            return dispatchUnknownSlashCommand(name, () => runExec(ctx))
         }
       }
 

@@ -1,7 +1,7 @@
+import { allKeybindActions, defaultBindings, keybindAction, type KeybindBindings } from '@desktop/keybind-actions'
 import { atom, computed } from 'nanostores'
 
 import { $registryVersion } from '@/contrib/registry'
-import { allKeybindActions, defaultBindings, keybindAction, type KeybindBindings } from '@/lib/keybinds/actions'
 import { canonicalizeCombo } from '@/lib/keybinds/combo'
 import { arraysEqual, persistString, storedString } from '@/lib/storage'
 

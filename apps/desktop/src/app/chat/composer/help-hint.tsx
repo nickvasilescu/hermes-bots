@@ -1,23 +1,10 @@
+import { COMPOSER_HELP_COMMAND_KEYS, COMPOSER_HELP_HOTKEY_ROWS } from '@desktop/composer-help-policy'
 import type { ReactNode } from 'react'
 
 import { KbdCombo } from '@/components/ui/kbd'
 import { useI18n } from '@/i18n'
 
 import { COMPLETION_DRAWER_CLASS } from './completion-drawer'
-
-const COMMON_COMMAND_KEYS = ['/help', '/clear', '/resume', '/details', '/copy', '/quit']
-
-/** Stable ids → i18n `hotkeyDescs` keys. Combos resolve mod labels per OS. */
-const COMPOSER_HOTKEY_ROWS = [
-  { id: 'composer.mention', combos: ['@'] },
-  { id: 'composer.slash', combos: ['/'] },
-  { id: 'composer.help', combos: ['?'] },
-  { id: 'composer.sendNewline', combos: ['enter', 'shift+enter'] },
-  { id: 'composer.sendQueued', combos: ['mod+shift+k'] },
-  { id: 'keybinds.openPanel', combos: ['mod+/'] },
-  { id: 'composer.cancel', combos: ['escape'] },
-  { id: 'composer.history', combos: ['up', 'down'] }
-] as const
 
 export function HelpHint() {
   const { t } = useI18n()
@@ -26,13 +13,13 @@ export function HelpHint() {
   return (
     <div className={COMPLETION_DRAWER_CLASS} data-slot="composer-completion-drawer" data-state="open" role="dialog">
       <Section title={c.commonCommands}>
-        {COMMON_COMMAND_KEYS.map(key => (
+        {COMPOSER_HELP_COMMAND_KEYS.map(key => (
           <Row description={c.commandDescs[key] ?? ''} key={key} keyLabel={key} mono />
         ))}
       </Section>
 
       <Section title={c.hotkeys}>
-        {COMPOSER_HOTKEY_ROWS.map(row => (
+        {COMPOSER_HELP_HOTKEY_ROWS.map(row => (
           <HotkeyRow combos={[...row.combos]} description={c.hotkeyDescs[row.id] ?? ''} key={row.id} />
         ))}
       </Section>

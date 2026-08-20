@@ -1,4 +1,8 @@
 import type { AppendMessage, ThreadMessage } from '@assistant-ui/react'
+import { readFileDataUrlForAttach, readImageForRemoteAttach } from '@desktop/attachment-readers'
+import { buildFileAttachPayload, shouldUploadAttachmentBytes } from '@desktop/file-attach-payload'
+import { useHandoffSession } from '@desktop/handoff-session'
+import { useSlashCommand } from '@desktop/use-slash-command'
 import { useStore } from '@nanostores/react'
 import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
 
@@ -10,7 +14,6 @@ import { pathLabel, SLASH_COMMAND_RE } from '@/lib/chat-runtime'
 import { sanitizeComposerInput } from '@/lib/composer-input-sanitize'
 import { triggerHaptic } from '@/lib/haptics'
 import { setMutableRef } from '@/lib/mutable-ref'
-import { normalize } from '@/lib/text'
 import { clearClarifyRequest } from '@/store/clarify'
 import {
   $composerAttachments,
@@ -19,7 +22,7 @@ import {
   updateComposerAttachment
 } from '@/store/composer'
 import { resetSessionBackground } from '@/store/composer-status'
-import { clearNotifications, notify, notifyError } from '@/store/notifications'
+import { clearNotifications, notifyError } from '@/store/notifications'
 import { clearPreviewArtifacts } from '@/store/preview-status'
 import { clearAllPrompts } from '@/store/prompts'
 import {
@@ -41,9 +44,6 @@ import { setSessionDraftingTool } from '@/store/tool-drafting'
 import type {
   ClientSessionState,
   FileAttachResponse,
-  HandoffFailResponse,
-  HandoffRequestResponse,
-  HandoffStateResponse,
   ImageAttachResponse,
   SessionRedirectResponse
 } from '../../../types'
@@ -62,24 +62,14 @@ import {
   type SurvivorUserRowIds,
   truncateSubmitParams
 } from './rewind'
-import { useSlashCommand } from './slash'
 import { useSubmitPrompt } from './submit'
 import {
   blobToDataUrl,
-  delay,
   friendlyRemoteAttachError,
   type GatewayRequest,
-  inlineErrorMessage,
-  readFileDataUrlForAttach,
-  readImageForRemoteAttach,
   type SubmitTextOptions,
   withSessionNotFoundResume
 } from './utils'
-
-interface HandoffResult {
-  ok: boolean
-  error?: string
-}
 
 const WINDOWS_ABSOLUTE_PATH_RE = /^(?:[A-Za-z]:[\\/]|\\\\)/
 const POSIX_ABSOLUTE_PATH_RE = /^\/(?!\/)/
@@ -129,7 +119,7 @@ export async function uploadComposerAttachment(
   const { backendCwd, remote, requestGateway, storedSessionId, onSessionRecovered, terminalBackend } = opts
   const path = attachment.path ?? ''
   const label = attachment.label || pathLabel(path)
-  const uploadBytes = remote || attachmentPathNeedsUpload(path, backendCwd, terminalBackend)
+  const uploadBytes = shouldUploadAttachmentBytes(remote, attachmentPathNeedsUpload(path, backendCwd, terminalBackend))
 
   // Read bytes/paths ONCE, outside the retry. Only the session-scoped RPC is
   // replayed on recovery — re-reading a multi-MB file to retry a dead session
@@ -181,12 +171,10 @@ export async function uploadComposerAttachment(
       }
     }
 
-    const result = await requestGateway<FileAttachResponse>('file.attach', {
-      name: label,
-      path,
-      session_id: liveSessionId,
-      ...(fileDataUrl ? { data_url: fileDataUrl } : {})
-    })
+    const result = await requestGateway<FileAttachResponse>(
+      'file.attach',
+      buildFileAttachPayload({ dataUrl: fileDataUrl, name: label, path, sessionId: liveSessionId })
+    )
 
     if (!result.attached || !result.ref_text) {
       throw new Error(result.message || `Could not attach ${label}`)
@@ -484,87 +472,7 @@ export function usePromptActions({
     updateSessionState
   })
 
-  // Queue a handoff of this session to a messaging platform and watch it to
-  // a terminal state. We only write the request through the gateway; the
-  // separate `hermes gateway` process performs the actual transfer, so we
-  // poll `handoff.state` (mirror of the CLI's block-poll) for the result.
-  const handoffSession = useCallback(
-    async (
-      platform: string,
-      options?: { onProgress?: (state: string) => void; sessionId?: string }
-    ): Promise<HandoffResult> => {
-      const sid = options?.sessionId || activeSessionIdRef.current
-
-      if (!sid) {
-        return { error: copy.sessionUnavailable, ok: false }
-      }
-
-      const target = normalize(platform)
-
-      if (!target) {
-        return { error: copy.handoff.failed(''), ok: false }
-      }
-
-      try {
-        options?.onProgress?.('pending')
-        await requestGateway<HandoffRequestResponse>('handoff.request', {
-          platform: target,
-          session_id: sid
-        })
-      } catch (err) {
-        return { error: inlineErrorMessage(err, copy.handoff.failed(target)), ok: false }
-      }
-
-      const markCompleted = (): HandoffResult => {
-        appendSessionTextMessage(sid, 'system', copy.handoff.systemNote(target))
-        notify({ kind: 'success', message: copy.handoff.success(target) })
-
-        return { ok: true }
-      }
-
-      const deadline = Date.now() + 60_000
-      let lastState = 'pending'
-
-      while (Date.now() < deadline) {
-        await delay(800)
-
-        let record: HandoffStateResponse
-
-        try {
-          record = await requestGateway<HandoffStateResponse>('handoff.state', { session_id: sid })
-        } catch {
-          continue
-        }
-
-        const state = record.state || 'pending'
-
-        if (state !== lastState) {
-          options?.onProgress?.(state)
-          lastState = state
-        }
-
-        if (state === 'completed') {
-          return markCompleted()
-        }
-
-        if (state === 'failed') {
-          return { error: record.error || copy.handoff.failed(target), ok: false }
-        }
-      }
-
-      const cleanup = await requestGateway<HandoffFailResponse>('handoff.fail', {
-        error: copy.handoff.timedOut,
-        session_id: sid
-      }).catch(() => null)
-
-      if (cleanup?.state === 'completed') {
-        return markCompleted()
-      }
-
-      return { error: copy.handoff.timedOut, ok: false }
-    },
-    [activeSessionIdRef, appendSessionTextMessage, copy, requestGateway]
-  )
+  const handoffSession = useHandoffSession({ activeSessionIdRef, appendSessionTextMessage, copy, requestGateway })
 
   const executeSlashCommand = useSlashCommand({
     activeSessionIdRef,

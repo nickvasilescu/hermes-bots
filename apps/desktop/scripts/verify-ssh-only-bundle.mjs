@@ -28,6 +28,25 @@ export const BANNED_ARTIFACT_MARKERS = Object.freeze([
   'hermes:updates:',
   'hermes:uninstall:',
   'hermes:fetchLinkTitle',
+  'hermes:readFileDataUrl',
+  'hermes:readFileDataUrlForAttach',
+  'hermes:readFileText',
+  'hermes:data-url-read-max',
+  'hermes:selectPaths',
+  'hermes:selectSavePath',
+  'hermes:fs:',
+  'hermes:git:',
+  'hermes:terminal:',
+  'hermes:window:readBelow',
+  'hermes:pet-overlay:',
+  'hermes:ssh-config:',
+  'hermes:openExternal',
+  'hermes:openPreviewInBrowser',
+  'hermes:vscode-theme:',
+  'Save Image As...',
+  'Copy Image Address',
+  'node-pty',
+  'get-windows',
   'StrictHostKeyChecking=accept-new',
   '--no-sandbox',
   'remote-debugging-port',
@@ -51,15 +70,193 @@ export const BANNED_RENDERER_MARKERS = Object.freeze([
   'Orgo API key',
   'Paste session token',
   'Create cloud computer',
-  'Use this Mac'
+  'Use this Mac',
+  'Add a provider credential before sending your first message.',
+  'No API key configured for provider',
+  'invalid_api_key',
+  'voice_tools_openai_key',
+  'startOAuthLogin',
+  'pollOAuthSession',
+  'submitOAuthCode',
+  'validateProviderCredential',
+  'saveOnboardingApiKey',
+  'Tool Gateway enabled',
+  'FIREWORKS_API_KEY',
+  'authMcpServer',
+  'getMcpOAuthFlow',
+  'installMcpCatalogEntry',
+  'mcp.setup.respond',
+  'mcp.setup.request',
+  'reload.mcp',
+  'mcp-setup-inline',
+  'Install the cua-driver backend below',
+  'Grant permissions',
+  'Could not start sign-in',
+  'browser.manage',
+  'Manage browser CDP connection',
+  'BROWSER_CDP_URL',
+  'checkHermesUpdate',
+  'openUpdatesWindow',
+  '/api/hermes/update',
+  '/api/gateway/restart',
+  'Uninstall Hermes',
+  '/api/memory/reset',
+  '/api/curator/paused',
+  '/api/curator/run',
+  '/api/ops/doctor',
+  '/api/ops/security-audit',
+  '/api/ops/backup',
+  '/api/ops/debug-share',
+  '/api/logs',
+  '/api/analytics/usage',
+  '/api/messaging/platforms',
+  'TELEGRAM_BOT_TOKEN',
+  'clear_env',
+  '/api/webhooks',
+  '/api/skills',
+  '/api/skills/toggle',
+  '/api/skills/hub/install',
+  '/api/skills/hub/uninstall',
+  '/api/skills/hub/update',
+  'createProfile',
+  'renameProfile',
+  'deleteProfile',
+  'updateProfileSoul',
+  '/api/profiles/import',
+  '/soul',
+  '/api/cron/jobs',
+  'pauseCronJob',
+  'resumeCronJob',
+  'triggerCronJob',
+  'deleteCronJob',
+  'handoff.request',
+  'handoff.state',
+  'handoff.fail',
+  'Always allow this command?',
+  'Allow this session',
+  'Refresh Models',
+  'providers&pview=keys',
+  'keys&kview=settings',
+  'tab=mcp',
+  '/api/learning/graph',
+  '/api/learning/node',
+  '/api/plugins/',
+  'profiles.list',
+  'profiles.get_asset',
+  'profiles.configure',
+  'profiles.create',
+  'profiles.set_asset',
+  'cron.manage',
+  'cli.exec',
+  'image.generate',
+  'The default profile cannot be deleted.',
+  'profile.export',
+  'profile.import',
+  'Export profile…',
+  'Import profile…',
+  'session.yolo',
+  '/yolo',
+  'YOLO armed for this chat',
+  'Toggle YOLO',
+  'body:{config:',
+  'sudo.request',
+  'sudo.respond',
+  'secret.request',
+  'secret.respond',
+  'projects.list',
+  'projects.tree',
+  'projects.project_sessions',
+  'projects.create',
+  'projects.update',
+  'projects.delete',
+  'projects.add_folder',
+  'projects.set_active',
+  'projects.record_repos',
+  'session.workspace.move',
+  'pet.select',
+  'pet.scale',
+  'pet.rename',
+  'pet.remove',
+  'pet.gallery',
+  'pet.disable',
+  'searchMarketplace',
+  'fetchMarketplace',
+  'slash.exec',
+  'command.dispatch',
+  'hermes-bots:pane-v2',
+  'readFileDataUrl',
+  'readFileDataUrlForAttach',
+  'readFileText',
+  'hermesDesktop.openExternal',
+  'display.message_reactions',
+  'Always allow ',
+  'Install theme',
+  'open.spotify.com/embed',
+  'www.youtube.com/embed',
+  '/api/fs/',
+  '/api/git/',
+  '/api/files/download',
+  'workspace.openFolder',
+  'view.showTerminal',
+  'keybinds.openPanel',
+  'Attach git context',
+  'composer.cronSuggestions',
+  'layout.editMode',
+  'plugins.reload',
+  'layout.reset',
+  'view.toggleStatusbar',
+  'keybinds.panel',
+  'view.toggleSidebar',
+  'view.flipPanes',
+  'view.toggleRightSidebar',
+  'view.toggleHud',
+  'aui_artifact-card',
+  'quick-entry-target',
+  'wake-indicator-surface'
 ])
+
+export const BANNED_RENDERER_HTML_MARKERS = Object.freeze(['http://127.0.0.1:*', 'ws://127.0.0.1:*'])
 
 // Every forbidden content marker is also forbidden in a resource path. This
 // catches an empty banned file/directory as well as marker text in a bundle.
 export const BANNED_RESOURCE_NAMES = BANNED_ARTIFACT_MARKERS
 
-const REQUIRED_IDENTITY_MARKERS = Object.freeze(['bot-ssh-only', 'Korgo Bot'])
+export const REQUIRED_IDENTITY_MARKERS = Object.freeze([
+  'bot-ssh-only',
+  'Korgo Bot',
+  'Connect existing Hermes over SSH',
+  'Mini Tailscale IP',
+  'New session'
+])
 const MAX_WALK_ENTRIES = 100_000
+
+function validateRendererCsp(contents, relative) {
+  const html = contents.toString('utf8')
+  const policies = (html.match(/<meta\b[^>]*>/giu) ?? []).filter(tag =>
+    /\bhttp-equiv\s*=\s*(["'])Content-Security-Policy\1/iu.test(tag)
+  )
+
+  if (policies.length !== 1) {
+    return [`${relative}: expected exactly one Content-Security-Policy meta tag, found ${policies.length}`]
+  }
+
+  const content = policies[0].match(/\bcontent\s*=\s*(["'])([\s\S]*?)\1/iu)?.[2]
+
+  if (!content) {
+    return [`${relative}: Content-Security-Policy meta tag is missing its content attribute`]
+  }
+
+  const connectDirectives = content
+    .split(';')
+    .map(directive => directive.trim().split(/\s+/u))
+    .filter(tokens => tokens[0]?.toLowerCase() === 'connect-src')
+
+  if (connectDirectives.length !== 1 || connectDirectives[0].length !== 2 || connectDirectives[0][1] !== "'self'") {
+    return [`${relative}: SSH renderer CSP must contain exactly connect-src 'self'`]
+  }
+
+  return []
+}
 
 function walk(root, visit, depth = 0, state = { entries: 0 }) {
   if (depth > 20) throw new Error(`artifact tree is unexpectedly deep below ${root}`)
@@ -95,6 +292,7 @@ function locateResourceDirectories(artifactRoot) {
 function scanResourceDirectory(resourcesDir) {
   const findings = []
   const identityFound = new Set()
+  let rendererHtmlCount = 0
   const appAsar = path.join(resourcesDir, 'app.asar')
   const appAsarUnpacked = path.join(resourcesDir, 'app.asar.unpacked')
 
@@ -131,6 +329,7 @@ function scanResourceDirectory(resourcesDir) {
 
     const normalizedRelative = relative.split(path.sep).join('/')
     const rendererAsset = /(?:^|\/)dist\/assets\/[^/]+\.js$/i.test(normalizedRelative)
+    const rendererHtml = /(?:^|\/)dist\/index\.html$/i.test(normalizedRelative)
 
     if (rendererAsset) {
       for (const marker of BANNED_RENDERER_MARKERS) {
@@ -139,7 +338,21 @@ function scanResourceDirectory(resourcesDir) {
         }
       }
     }
+
+    if (rendererHtml) {
+      rendererHtmlCount += 1
+      for (const marker of BANNED_RENDERER_HTML_MARKERS) {
+        if (contents.includes(Buffer.from(marker))) {
+          findings.push(`${relative}: banned SSH renderer CSP marker ${JSON.stringify(marker)}`)
+        }
+      }
+      findings.push(...validateRendererCsp(contents, relative))
+    }
   })
+
+  if (rendererHtmlCount !== 1) {
+    findings.push(`${resourcesDir}: expected exactly one packaged dist/index.html, found ${rendererHtmlCount}`)
+  }
 
   return { findings, identityFound }
 }

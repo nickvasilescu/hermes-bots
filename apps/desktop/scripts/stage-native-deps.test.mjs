@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { test } from 'vitest'
 
 import {
+  removeStagedHostNativeDeps,
   stageGetWindowsInto,
   stageNodePtyInto,
   classifyNativeBinary
@@ -22,11 +23,11 @@ const { join } = path
 /** Write a fake .node file with the given platform's magic bytes. */
 function makeFakeNode(filePath, platform) {
   const headers = {
-    linux:   Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x00, 0x00, 0x00, 0x00]), // ELF
+    linux: Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x00, 0x00, 0x00, 0x00]), // ELF
     // On x64/arm64 Darwin, Mach-O binaries are stored little-endian on disk
     // (MH_CIGAM_64 = cffaedfe). This is the form node-pty's prebuilds ship in.
-    darwin:  Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x00, 0x00, 0x00, 0x00]), // Mach-O 64-bit LE (CIGAM_64)
-    win32:   Buffer.from([0x4d, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),  // MZ (PE)
+    darwin: Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x00, 0x00, 0x00, 0x00]), // Mach-O 64-bit LE (CIGAM_64)
+    win32: Buffer.from([0x4d, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]) // MZ (PE)
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(filePath, headers[platform] ?? headers.linux)
@@ -49,7 +50,7 @@ function makeFakeUnixTerminal(srcRoot) {
   fs.writeFileSync(
     join(srcRoot, 'lib', 'unixTerminal.js'),
     [
-      "exports.resolveHelper = function (helperPath) {",
+      'exports.resolveHelper = function (helperPath) {',
       "  helperPath = helperPath.replace('app.asar', 'app.asar.unpacked');",
       "  helperPath = helperPath.replace('node_modules.asar', 'node_modules.asar.unpacked');",
       '  return helperPath;',
@@ -322,10 +323,7 @@ test.skipIf(process.platform === 'win32')(
       )
 
       assert.equal(stagedUnixTerminal.resolveHelper(unpackedHelper), unpackedHelper)
-      assert.equal(
-        stagedUnixTerminal.resolveHelper(nodeModulesUnpackedHelper),
-        nodeModulesUnpackedHelper
-      )
+      assert.equal(stagedUnixTerminal.resolveHelper(nodeModulesUnpackedHelper), nodeModulesUnpackedHelper)
       assert.equal(
         fs.statSync(join(destRoot, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper')).mode & 0o777,
         0o755
@@ -350,10 +348,7 @@ test('validation rejects a staged binary with the wrong platform magic', () => {
     // Overwrite the prebuild .node with the WRONG platform magic.
     makeFakeNode(join(srcRoot, 'prebuilds', 'linux-x64', 'pty.node'), 'darwin')
 
-    assert.throws(
-      () => stageNodePtyInto(srcRoot, destRoot, { platform: 'linux', arch: 'x64' }),
-      /platform mismatch/i
-    )
+    assert.throws(() => stageNodePtyInto(srcRoot, destRoot, { platform: 'linux', arch: 'x64' }), /platform mismatch/i)
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
@@ -409,10 +404,7 @@ test('win32 staging rejects a binding dir that claims win32 but holds a foreign 
       bindings: [{ dir: 'napi-9-win32-unknown-x64', platform: 'darwin' }]
     })
 
-    assert.throws(
-      () => stageGetWindowsInto(srcRoot, destRoot, { platform: 'win32' }),
-      /expected win32, got darwin/
-    )
+    assert.throws(() => stageGetWindowsInto(srcRoot, destRoot, { platform: 'win32' }), /expected win32, got darwin/)
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
@@ -428,10 +420,7 @@ test('win32 staging fails when only foreign bindings exist', () => {
       bindings: [{ dir: 'napi-9-darwin-unknown-arm64', platform: 'darwin' }]
     })
 
-    assert.throws(
-      () => stageGetWindowsInto(srcRoot, destRoot, { platform: 'win32' }),
-      /no win32 prebuilt binding/
-    )
+    assert.throws(() => stageGetWindowsInto(srcRoot, destRoot, { platform: 'win32' }), /no win32 prebuilt binding/)
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
@@ -450,18 +439,13 @@ test('win32 staging self-heals through the rebuild hook when the binding is miss
     let calls = 0
     const rebuild = () => {
       calls += 1
-      makeFakeNode(
-        join(srcRoot, 'lib', 'binding', 'napi-9-win32-unknown-x64', 'node-get-windows.node'),
-        'win32'
-      )
+      makeFakeNode(join(srcRoot, 'lib', 'binding', 'napi-9-win32-unknown-x64', 'node-get-windows.node'), 'win32')
     }
 
     stageGetWindowsInto(srcRoot, destRoot, { platform: 'win32', rebuild })
 
     assert.equal(calls, 1)
-    assert.ok(
-      existsSync(join(destRoot, 'lib', 'binding', 'napi-9-win32-unknown-x64', 'node-get-windows.node'))
-    )
+    assert.ok(existsSync(join(destRoot, 'lib', 'binding', 'napi-9-win32-unknown-x64', 'node-get-windows.node')))
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
@@ -492,10 +476,7 @@ test('staging refuses a get-windows version the lib/windows.js rewrite was not v
 
     makeFakeGetWindows(srcRoot, { version: '9.4.0' })
 
-    assert.throws(
-      () => stageGetWindowsInto(srcRoot, destRoot, { platform: 'darwin' }),
-      /verified against 9\.3\.0/
-    )
+    assert.throws(() => stageGetWindowsInto(srcRoot, destRoot, { platform: 'darwin' }), /verified against 9\.3\.0/)
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
@@ -515,6 +496,25 @@ test('darwin staging ships the Swift helper executable and the rewritten windows
     const staged = fs.readFileSync(join(destRoot, 'lib', 'windows.js'), 'utf8')
     assert.match(staged, /Rewritten by stage-native-deps\.mjs/)
     assert.ok(!staged.includes('node-pre-gyp'), 'pre-gyp loader must not survive staging')
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('SSH-only cleanup removes staged host native packages and nothing adjacent', () => {
+  const tmp = fs.mkdtempSync(join(os.tmpdir(), 'hermes-stage-clean-'))
+
+  try {
+    for (const packageName of ['node-pty', 'get-windows', 'retained-package']) {
+      const packageRoot = join(tmp, 'node_modules', packageName)
+      fs.mkdirSync(packageRoot, { recursive: true })
+      fs.writeFileSync(join(packageRoot, 'package.json'), '{}')
+    }
+
+    assert.deepEqual(removeStagedHostNativeDeps(tmp), ['node-pty', 'get-windows'])
+    assert.equal(fs.existsSync(join(tmp, 'node_modules', 'node-pty')), false)
+    assert.equal(fs.existsSync(join(tmp, 'node_modules', 'get-windows')), false)
+    assert.equal(fs.existsSync(join(tmp, 'node_modules', 'retained-package')), true)
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }

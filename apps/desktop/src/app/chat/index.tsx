@@ -1,4 +1,10 @@
 import { type AppendMessage, AssistantRuntimeProvider, type ThreadMessage } from '@assistant-ui/react'
+import { type DragKind, type DroppedFile, partitionDroppedFiles, useChatFileDropZone } from '@desktop/chat-file-drop'
+import { CHAT_SURFACE_CAPABILITIES } from '@desktop/chat-surface-capabilities'
+import { $petActive, $petOverlayActive } from '@desktop/pet-presence'
+import { PromptOverlays } from '@desktop/prompt-overlays'
+import { SessionTitle } from '@desktop/session-title'
+import { COMPOSER_HEART_CONFIG, HeartField } from '@desktop/vibe-hearts'
 import { useStore } from '@nanostores/react'
 import { useQuery } from '@tanstack/react-query'
 import type { ReadableAtom } from 'nanostores'
@@ -9,13 +15,10 @@ import { useLocation } from 'react-router'
 import type { SubmitTextOptions } from '@/app/session/hooks/use-prompt-actions/utils'
 import { Thread } from '@/components/assistant-ui/thread'
 import { TranscriptWindowProvider } from '@/components/assistant-ui/thread/transcript-window'
-import { COMPOSER_HEART_CONFIG, HeartField } from '@/components/chat/vibe-hearts'
 import { usePaneVisible } from '@/components/pane-shell/pane-visibility'
 import { $sessionTileDragging, $sessionTileEdgeHover } from '@/components/pane-shell/tree/store'
-import { PromptOverlays } from '@/components/prompt-overlays'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/error-state'
-import { TitleMenuTrigger } from '@/components/ui/title-menu-trigger'
 import { type HermesGateway } from '@/hermes'
 import { useI18n } from '@/i18n'
 import type { ChatMessage } from '@/lib/chat-messages'
@@ -26,8 +29,6 @@ import { cn } from '@/lib/utils'
 import { migrateSessionDraft } from '@/store/composer'
 import { migrateQueuedPrompts, parkQueuedPrompts } from '@/store/composer-queue'
 import { $pinnedSessionIds } from '@/store/layout'
-import { $petActive } from '@/store/pet'
-import { $petOverlayActive } from '@/store/pet-overlay'
 import { $activeGatewayProfile, $gatewaySwapTarget, $profiles } from '@/store/profile'
 import {
   $contextSuggestions,
@@ -55,13 +56,10 @@ import { requestComposerInsert } from './composer/focus'
 import { droppedFileInlineRefs } from './composer/inline-refs'
 import { useComposerScope } from './composer/scope'
 import type { ChatBarState } from './composer/types'
-import { type DroppedFile, partitionDroppedFiles } from './hooks/use-composer-actions'
-import { type DragKind, useFileDropZone } from './hooks/use-file-drop-zone'
 import { ProfileTag } from './profile-tag'
 import { useRuntimeMessageRepository } from './runtime-repository'
 import { ScrollToBottomButton } from './scroll-to-bottom-button'
 import { useSessionView } from './session-view'
-import { SessionActionsMenu } from './sidebar/session-actions-menu'
 import { threadLoadingState } from './thread-loading'
 import { advanceTranscriptWindow, type TranscriptWindowState } from './transcript-window'
 
@@ -149,7 +147,7 @@ function ChatHeader({
         }}
       >
         {showProfileTag && <ProfileTag className="pointer-events-auto mr-1.5" profile={activeStoredSession?.profile} />}
-        <SessionActionsMenu
+        <SessionTitle
           align="start"
           onDelete={selectedSessionId ? onDeleteSelectedSession : undefined}
           onPin={selectedSessionId ? onToggleSelectedPin : undefined}
@@ -157,9 +155,7 @@ function ChatHeader({
           sessionId={selectedSessionId || activeSessionId || ''}
           sideOffset={8}
           title={title}
-        >
-          <TitleMenuTrigger>{title}</TitleMenuTrigger>
-        </SessionActionsMenu>
+        />
       </div>
     </header>
   )
@@ -457,12 +453,12 @@ export const ChatView = memo(function ChatView({
         quickModels
       },
       tools: {
-        enabled: true,
+        enabled: CHAT_SURFACE_CAPABILITIES.tools,
         label: 'Add context',
         suggestions: contextSuggestions
       },
       voice: {
-        enabled: true,
+        enabled: CHAT_SURFACE_CAPABILITIES.voice,
         active: false
       }
     }),
@@ -495,7 +491,10 @@ export const ChatView = memo(function ChatView({
   // The drop zone below only handles files; session drops commit through the
   // drag session itself, which routes a center/link drop to this surface's
   // composer via `data-composer-target`.
-  const { dragKind, dropHandlers } = useFileDropZone({ enabled: showChatBar, onDropFiles })
+  const { dragKind, dropHandlers } = useChatFileDropZone({
+    enabled: showChatBar && CHAT_SURFACE_CAPABILITIES.fileDrop,
+    onDropFiles
+  })
 
   // While a session drag targets one of this surface's EDGES or a tab strip,
   // the zone overlay/caret owns the visual — the link overlay stands down.

@@ -1,3 +1,4 @@
+import { ProfileManagementActions } from '@desktop/profile-management-actions'
 import { useStore } from '@nanostores/react'
 
 import { sessionDotClassName } from '@/app/chat/session-status-dot'
@@ -49,14 +50,7 @@ import {
   toggleSidebarRowMeta,
   toggleSidebarStatusFilter
 } from '@/store/layout'
-import {
-  $profiles,
-  $showAllProfiles,
-  normalizeProfileKey,
-  requestProfileCreate,
-  toggleShowAllProfiles
-} from '@/store/profile'
-import { runImportProfileFlow } from '@/store/profile-share'
+import { $profiles, $showAllProfiles, normalizeProfileKey, toggleShowAllProfiles } from '@/store/profile'
 import { $projectTree } from '@/store/projects'
 import type { PullRequestBucket } from '@/store/pull-requests'
 import { $unreadFinishedSessionIds, markAllSessionsRead } from '@/store/session'
@@ -338,10 +332,7 @@ export function SidebarFilterMenu({ className }: { className?: string }) {
                   <DropdownMenuSeparator />
                 </>
               )}
-              <DropdownMenuItem onSelect={requestProfileCreate}>{t.profiles.newProfile}</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void runImportProfileFlow()}>
-                {t.profiles.importProfile}
-              </DropdownMenuItem>
+              <ProfileManagementActions />
             </DropdownMenuSubContent>
           </DropdownMenuSub>
 

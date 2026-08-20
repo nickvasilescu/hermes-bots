@@ -4,9 +4,15 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import test from 'node:test'
+import { test } from 'vitest'
 
-import { BANNED_ARTIFACT_MARKERS, BANNED_RENDERER_MARKERS, BANNED_RESOURCE_NAMES } from './verify-ssh-only-bundle.mjs'
+import {
+  BANNED_ARTIFACT_MARKERS,
+  BANNED_RENDERER_HTML_MARKERS,
+  BANNED_RENDERER_MARKERS,
+  BANNED_RESOURCE_NAMES,
+  REQUIRED_IDENTITY_MARKERS
+} from './verify-ssh-only-bundle.mjs'
 
 const verifier = fileURLToPath(new URL('./verify-ssh-only-bundle.mjs', import.meta.url))
 
@@ -15,7 +21,14 @@ function fixture(contents = 'Korgo Bot bot-ssh-only clean packaged application')
   const resources = path.join(root, 'resources')
   fs.mkdirSync(path.join(resources, 'app.asar.unpacked', 'dist', 'assets'), { recursive: true })
   fs.writeFileSync(path.join(resources, 'app.asar'), contents)
-  fs.writeFileSync(path.join(resources, 'app.asar.unpacked', 'dist', 'assets', 'renderer.js'), 'clean')
+  fs.writeFileSync(
+    path.join(resources, 'app.asar.unpacked', 'dist', 'assets', 'renderer.js'),
+    'Connect existing Hermes over SSH Mini Tailscale IP New session'
+  )
+  fs.writeFileSync(
+    path.join(resources, 'app.asar.unpacked', 'dist', 'index.html'),
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; connect-src \'self\'">'
+  )
   return root
 }
 
@@ -52,7 +65,23 @@ test('executed verifier rejects banned resource names', () => {
   }
 })
 
-test('executed verifier rejects every banned SSH renderer marker', () => {
+test('executed verifier rejects empty staged host-native package directories', () => {
+  for (const packageName of ['node-pty', 'get-windows']) {
+    const root = fixture()
+    try {
+      fs.mkdirSync(path.join(root, 'resources', 'app.asar.unpacked', 'dist', 'node_modules', packageName), {
+        recursive: true
+      })
+      const result = runVerifier(root)
+      assert.notEqual(result.status, 0, packageName)
+      assert.match(result.stderr, /banned resource name/, packageName)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('executed verifier rejects every banned SSH renderer marker', { timeout: 30_000 }, () => {
   for (const marker of BANNED_RENDERER_MARKERS) {
     const root = fixture()
     try {
@@ -77,6 +106,41 @@ test('renderer-only markers do not reject a main-process migration identifier', 
   }
 })
 
+test('executed verifier rejects loopback access in the SSH renderer CSP', () => {
+  for (const marker of BANNED_RENDERER_HTML_MARKERS) {
+    const root = fixture()
+    try {
+      fs.writeFileSync(path.join(root, 'resources', 'app.asar.unpacked', 'dist', 'index.html'), marker)
+      const result = runVerifier(root)
+      assert.notEqual(result.status, 0, marker)
+      assert.match(result.stderr, /banned SSH renderer CSP marker/, marker)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('executed verifier requires one exact self-only SSH renderer CSP', () => {
+  const variants = [
+    '<html><head></head></html>',
+    '<meta http-equiv="Content-Security-Policy" content="connect-src *">',
+    '<meta http-equiv="Content-Security-Policy" content="connect-src \'self\' https:">',
+    '<meta http-equiv="Content-Security-Policy" content="connect-src \'self\'">'.repeat(2)
+  ]
+
+  for (const html of variants) {
+    const root = fixture()
+    try {
+      fs.writeFileSync(path.join(root, 'resources', 'app.asar.unpacked', 'dist', 'index.html'), html)
+      const result = runVerifier(root)
+      assert.notEqual(result.status, 0, html)
+      assert.match(result.stderr, /Content-Security-Policy|connect-src/, html)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
 test('executed verifier fails closed when packaged resources are incomplete', () => {
   const root = fixture()
   try {
@@ -86,6 +150,25 @@ test('executed verifier fails closed when packaged resources are incomplete', ()
     assert.match(result.stderr, /missing packaged resources\/app\.asar\.unpacked/)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('executed verifier rejects a package missing any required SSH UI identity marker', () => {
+  for (const marker of REQUIRED_IDENTITY_MARKERS) {
+    const root = fixture()
+    try {
+      for (const file of [
+        path.join(root, 'resources', 'app.asar'),
+        path.join(root, 'resources', 'app.asar.unpacked', 'dist', 'assets', 'renderer.js')
+      ]) {
+        fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replaceAll(marker, 'removed-marker'))
+      }
+      const result = runVerifier(root)
+      assert.notEqual(result.status, 0, marker)
+      assert.match(result.stderr, /missing required packaged identity marker/, marker)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   }
 })
 

@@ -1,15 +1,15 @@
+import { GatewayRestartButton } from '@desktop/gateway-restart-button'
+import { getLogs } from '@desktop/logs-client'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 
 import { StatusDot, type StatusTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { LogView } from '@/components/ui/log-view'
 import { Tip } from '@/components/ui/tooltip'
-import { getLogs } from '@/hermes'
 import { useI18n } from '@/i18n'
-import { LayoutDashboard, RefreshCw } from '@/lib/icons'
+import { LayoutDashboard } from '@/lib/icons'
 import type { RuntimeReadinessResult } from '@/lib/runtime-readiness'
 import { cn } from '@/lib/utils'
-import { runGatewayRestart } from '@/store/system-actions'
 import type { StatusResponse } from '@/types/hermes'
 
 interface GatewayMenuPanelProps {
@@ -104,13 +104,6 @@ export function GatewayMenuPanel({
     onOpenSystem()
   }
 
-  // Shared restart helper: never rejects and surfaces progress in the statusbar
-  // gateway indicator, so just fire and close.
-  const restart = () => {
-    onClose()
-    void runGatewayRestart()
-  }
-
   const gatewayOpen = gatewayState === 'open'
   const gatewayConnecting = gatewayState === 'connecting'
   const inferenceReady = gatewayOpen && inferenceStatus?.ready === true
@@ -157,17 +150,7 @@ export function GatewayMenuPanel({
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
-          <Tip label={t.commandCenter.restartGateway}>
-            <Button
-              aria-label={t.commandCenter.restartGateway}
-              className="text-muted-foreground hover:text-foreground"
-              onClick={restart}
-              size="icon-xs"
-              variant="ghost"
-            >
-              <RefreshCw />
-            </Button>
-          </Tip>
+          <GatewayRestartButton label={t.commandCenter.restartGateway} onClose={onClose} />
           <Tip label={copy.openSystem}>
             <Button
               aria-label={copy.openSystem}

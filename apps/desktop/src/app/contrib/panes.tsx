@@ -8,6 +8,7 @@
  *    StatusbarItem) — plugins add theirs through the identical call.
  */
 
+import { getLogs } from '@desktop/logs-client'
 import { useStore } from '@nanostores/react'
 import { useQuery } from '@tanstack/react-query'
 import { atom } from 'nanostores'
@@ -21,7 +22,6 @@ import { DecodeText } from '@/components/ui/decode-text'
 import { ContribBoundary, ContribRender } from '@/contrib/react/boundary'
 import { useContributions } from '@/contrib/react/use-contributions'
 import { registry } from '@/contrib/registry'
-import { getLogs } from '@/hermes'
 import { normalizeOrLocalPreviewTarget } from '@/lib/local-preview'
 import { cn } from '@/lib/utils'
 import { openPreview } from '@/store/preview'

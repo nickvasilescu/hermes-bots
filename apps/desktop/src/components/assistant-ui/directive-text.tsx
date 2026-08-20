@@ -2,15 +2,15 @@
 
 import type { Unstable_DirectiveFormatter, Unstable_DirectiveSegment, Unstable_TriggerItem } from '@assistant-ui/core'
 import type { TextMessagePartComponent, TextMessagePartProps } from '@assistant-ui/react'
+import { OPEN_EXTERNAL_DIRECTIVE } from '@desktop/external-directive-action'
 import type { FC } from 'react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 
 import { ZoomableImage } from '@/components/chat/zoomable-image'
 import type { I18nContextValue } from '@/i18n'
 import { extractEmbeddedImages } from '@/lib/embedded-images'
-import { openExternalLink } from '@/lib/external-link'
 import { triggerHaptic } from '@/lib/haptics'
-import { gatewayMediaDataUrl, isRemoteGateway } from '@/lib/media'
+import { gatewayMediaDataUrl } from '@/lib/media'
 import { useSessionLinkTitle } from '@/lib/session-link-title'
 import { parseSessionRefValue, sessionRefFallbackLabel } from '@/lib/session-refs'
 import { cn } from '@/lib/utils'
@@ -411,10 +411,9 @@ const DirectiveImage: FC<{ id: string; label: string }> = ({ id, label }) => {
 
     let alive = true
 
-    // Remote gateway: the image lives on the gateway's disk, not ours — fetch
-    // it over the authenticated API. Local: read it straight off this disk.
-    const load =
-      window.hermesDesktop && isRemoteGateway() ? gatewayMediaDataUrl(id) : window.hermesDesktop?.readFileDataUrl(id)
+    // The SKU-selected media client owns any host/backend file access. The SSH
+    // client deliberately resolves only inline media and never accepts a path.
+    const load = gatewayMediaDataUrl(id)
 
     void Promise.resolve(load)
       .then(url => alive && url && setSrc(url))
@@ -485,11 +484,15 @@ export const DIRECTIVE_ACTIONS: Record<string, DirectiveAction> = {
     label: t => t.composer.openDirective,
     run: openSessionRef
   },
-  url: {
-    icon: 'link-external',
-    label: t => t.composer.openDirective,
-    run: openExternalLink
-  }
+  ...(OPEN_EXTERNAL_DIRECTIVE
+    ? {
+        url: {
+          icon: 'link-external',
+          label: (t: I18nContextValue['t']) => t.composer.openDirective,
+          run: OPEN_EXTERNAL_DIRECTIVE
+        }
+      }
+    : {})
 }
 
 /** A `@session:<profile>/<id>` reference in the user transcript (directive

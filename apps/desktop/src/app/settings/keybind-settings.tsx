@@ -1,3 +1,12 @@
+import {
+  allKeybindActions,
+  KEYBIND_CATEGORIES,
+  KEYBIND_PANEL_ACTION,
+  KEYBIND_READONLY,
+  type KeybindActionMeta,
+  type KeybindReadonly,
+  KEYBINDS_AREA
+} from '@desktop/keybind-actions'
 import { useStore } from '@nanostores/react'
 import { useMemo, useState } from 'react'
 
@@ -8,15 +17,6 @@ import { SearchField } from '@/components/ui/search-field'
 import { Tip } from '@/components/ui/tooltip'
 import { useContributions } from '@/contrib/react/use-contributions'
 import { useI18n } from '@/i18n'
-import {
-  allKeybindActions,
-  KEYBIND_CATEGORIES,
-  KEYBIND_PANEL_ACTION,
-  KEYBIND_READONLY,
-  type KeybindActionMeta,
-  type KeybindReadonly,
-  KEYBINDS_AREA
-} from '@/lib/keybinds/actions'
 import { formatCombo } from '@/lib/keybinds/combo'
 import { arraysEqual } from '@/lib/storage'
 import {

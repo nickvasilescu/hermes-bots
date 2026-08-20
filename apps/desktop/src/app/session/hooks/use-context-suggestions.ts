@@ -1,3 +1,4 @@
+import { buildPathCompletionParams } from '@desktop/path-completion-params'
 import { type MutableRefObject, useCallback, useEffect } from 'react'
 
 import { $currentCwd, setContextSuggestions } from '@/store/session'
@@ -34,11 +35,11 @@ export function useContextSuggestions({
     const stillCurrent = () => activeSessionIdRef.current === sessionId && $currentCwd.get() === cwd
 
     try {
-      const result = await requestGateway<{ items?: ContextSuggestion[] }>('complete.path', {
-        session_id: sessionId,
-        word: '@file:',
-        cwd: cwd || undefined
-      })
+      const params = buildPathCompletionParams({ cwd, sessionId, word: '@file:' })
+
+      const result = params
+        ? await requestGateway<{ items?: ContextSuggestion[] }>('complete.path', params)
+        : { items: [] }
 
       if (stillCurrent()) {
         setContextSuggestions((result.items || []).filter(i => i.text))

@@ -82,6 +82,12 @@ test('buildSessionWindowUrl builds a packaged file URL with the flag before the 
   assert.match(url, /^file:\/\/.*index\.html\?win=secondary#\/abc$/)
 })
 
+test('buildSessionWindowUrl supports a secure packaged application origin', () => {
+  const url = buildSessionWindowUrl('abc', { rendererUrl: 'korgo-app://bundle/index.html' })
+
+  assert.equal(url, 'korgo-app://bundle/index.html?win=secondary#/abc')
+})
+
 test('buildSessionWindowUrl adds the watch flag for spectator windows, before the hash', () => {
   const url = buildSessionWindowUrl('abc', { devServer: 'http://localhost:5173', watch: true })
 

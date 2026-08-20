@@ -7,6 +7,10 @@
  * layout tree's zones independently rendered — the whole point of the shell.
  */
 
+import { ChatSidebar } from '@desktop/chat-sidebar'
+import { setStatusbarItemGroup } from '@desktop/local-panes'
+import { StatusbarSurface } from '@desktop/statusbar-surface'
+import { TerminalSurface } from '@desktop/terminal-surface'
 import { useStore } from '@nanostores/react'
 import { type ComponentProps, lazy, memo, type ReactNode, Suspense, useMemo } from 'react'
 import { Navigate, Route, Routes, useParams } from 'react-router'
@@ -14,27 +18,21 @@ import { Navigate, Route, Routes, useParams } from 'react-router'
 import { ContribBoundary, ContribRender } from '@/contrib/react/boundary'
 import { useContributions } from '@/contrib/react/use-contributions'
 import { $activeGatewayProfile } from '@/store/profile'
-import { $freshDraftReady, $gatewayState } from '@/store/session'
+import { $gatewayState } from '@/store/session'
 
 import { ChatView } from '../chat'
-import { ChatSidebar } from '../chat/sidebar'
-import { TerminalPaneChrome } from '../right-sidebar/terminal/chrome'
 import { contributedRoutes, NEW_CHAT_ROUTE, ROUTES_AREA, sessionRoute } from '../routes'
-import { useStatusSnapshot } from '../shell/hooks/use-status-snapshot'
-import { useStatusbarItems } from '../shell/hooks/use-statusbar-items'
 import { ModelMenuPanel } from '../shell/model-menu-panel'
-import { StatusbarControls } from '../shell/statusbar-controls'
 
 import { latestChatActions, latestSidebarActions } from './latest-actions'
-import { setStatusbarItemGroup, useStatusbarContributions } from './panes'
 import type { SidebarActions, WiringActions } from './types'
 
 // Same lazy-view split as DesktopController — pages load on demand. The
 // full-page views the workspace route table mounts live here; overlay views
 // (agents/settings/…) are the controller's and stay in wiring.tsx.
-const ArtifactsView = lazy(async () => ({ default: (await import('../artifacts')).ArtifactsView }))
-const MessagingView = lazy(async () => ({ default: (await import('../messaging')).MessagingView }))
-const SkillsView = lazy(async () => ({ default: (await import('../skills')).SkillsView }))
+const ArtifactsView = lazy(async () => ({ default: (await import('@desktop/artifacts-view')).ArtifactsView }))
+const MessagingView = lazy(async () => ({ default: (await import('@desktop/messaging-view')).MessagingView }))
+const SkillsView = lazy(async () => ({ default: (await import('@desktop/skills-view')).SkillsView }))
 
 export function LegacySessionRedirect() {
   const { sessionId } = useParams()
@@ -54,52 +52,7 @@ export const SidebarSurface = memo(function SidebarSurface({
   return <ChatSidebar currentView={currentView} {...latestActions} />
 })
 
-export const TerminalSurface = memo(function TerminalSurface() {
-  return (
-    <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-(--ui-terminal-surface-background)">
-      <TerminalPaneChrome />
-    </div>
-  )
-})
-
-/** Owns the statusbar's own data hooks (status snapshot poll, contributed
- *  items) so its 15s refresh — and any statusbar-only churn — re-renders the
- *  bar alone, never the chat/sidebar/terminal. */
-export const StatusbarSurface = memo(function StatusbarSurface({
-  actions,
-  agentsOpen,
-  chatOpen,
-  commandCenterOpen
-}: {
-  actions: WiringActions
-  agentsOpen: boolean
-  chatOpen: boolean
-  commandCenterOpen: boolean
-}) {
-  const gatewayState = useStore($gatewayState)
-  const freshDraftReady = useStore($freshDraftReady)
-  const { inferenceStatus, statusSnapshot } = useStatusSnapshot(gatewayState, actions.requestGateway)
-  const extraLeftItems = useStatusbarContributions('left')
-  const extraRightItems = useStatusbarContributions('right')
-
-  const { leftStatusbarItems, statusbarItems } = useStatusbarItems({
-    agentsOpen,
-    chatOpen,
-    commandCenterOpen,
-    extraLeftItems,
-    extraRightItems,
-    freshDraftReady,
-    gatewayState,
-    inferenceStatus,
-    openAgents: actions.openAgents,
-    openCommandCenterSection: actions.openCommandCenterSection,
-    requestGateway: actions.requestGateway,
-    statusSnapshot,
-    toggleCommandCenter: actions.toggleCommandCenter
-  })
-
-  return <StatusbarControls items={statusbarItems} leftItems={leftStatusbarItems} />
-})
+export { StatusbarSurface, TerminalSurface }
 
 /** The workspace pane: the real route table (chat + full-page views + plugin
  *  routes). Subscribes to `$gatewayState` and ROUTES_AREA itself; the gateway

@@ -1,7 +1,8 @@
 import { TRANSLATIONS } from '@desktop/i18n-catalog'
+import { DESKTOP_I18N_CONFIG_CLIENT } from '@desktop/i18n-config-client'
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 
-import { getHermesConfigRecord, type HermesConfigRecord, saveHermesConfig } from '@/hermes'
+import type { HermesConfigRecord } from '@/hermes'
 
 import { DEFAULT_LOCALE, localeConfigValue, normalizeLocale } from './languages'
 import { setRuntimeI18nLocale } from './runtime'
@@ -12,23 +13,6 @@ export { LOCALE_META } from './languages'
 export interface I18nConfigClient {
   getConfig: () => Promise<HermesConfigRecord>
   saveConfig: (config: HermesConfigRecord) => Promise<{ ok: boolean }>
-}
-
-const defaultConfigClient: I18nConfigClient = {
-  getConfig: () => {
-    if (typeof window === 'undefined' || !window.hermesDesktop?.api) {
-      return Promise.resolve({})
-    }
-
-    return getHermesConfigRecord()
-  },
-  saveConfig: config => {
-    if (typeof window === 'undefined' || !window.hermesDesktop?.api) {
-      return Promise.resolve({ ok: true })
-    }
-
-    return saveHermesConfig(config)
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -92,7 +76,11 @@ export interface I18nProviderProps {
   initialLocale?: unknown
 }
 
-export function I18nProvider({ children, configClient = defaultConfigClient, initialLocale }: I18nProviderProps) {
+export function I18nProvider({
+  children,
+  configClient = DESKTOP_I18N_CONFIG_CLIENT,
+  initialLocale
+}: I18nProviderProps) {
   const [locale, setLocaleState] = useState<Locale>(() => normalizeLocale(initialLocale))
   const [isLoadingConfig, setIsLoadingConfig] = useState(false)
   const [isSavingLocale, setIsSavingLocale] = useState(false)

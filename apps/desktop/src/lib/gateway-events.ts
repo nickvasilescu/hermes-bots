@@ -1,3 +1,5 @@
+import { UNSCOPED_STREAM_EVENT_TYPES as UNSCOPED_STREAM_EVENT_TYPE_LIST } from '@desktop/gateway-event-types'
+
 import type { StatusbarMenuItem } from '@/app/shell/statusbar-controls'
 
 const LOG_TAIL = 5
@@ -17,27 +19,7 @@ function asRecord(payload: unknown): Record<string, unknown> {
  * Without this, ``explicitSid || activeSessionId`` reattributes live deltas to
  * the newly focused chat.
  */
-const UNSCOPED_STREAM_EVENT_TYPES = new Set([
-  'approval.request',
-  'browser.progress',
-  'clarify.request',
-  'error',
-  'mcp.setup.request',
-  'message.complete',
-  'message.delta',
-  'message.interim',
-  'message.start',
-  'reasoning.available',
-  'reasoning.delta',
-  'secret.request',
-  'status.update',
-  'sudo.request',
-  'thinking.delta',
-  'tool.complete',
-  'tool.generating',
-  'tool.progress',
-  'tool.start'
-])
+const UNSCOPED_STREAM_EVENT_TYPES = new Set<string>(UNSCOPED_STREAM_EVENT_TYPE_LIST)
 
 const UNSCOPED_STREAM_END_EVENT_TYPES = new Set(['error', 'message.complete'])
 

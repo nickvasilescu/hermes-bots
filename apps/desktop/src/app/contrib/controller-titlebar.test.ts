@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const source = readFileSync('src/app/contrib/controller.tsx', 'utf8')
-const rightSidebarStoreSource = readFileSync('src/app/right-sidebar/store.ts', 'utf8')
+const rightSidebarStoreSource = readFileSync('src/app/right-sidebar/store.full.ts', 'utf8')
 const splitSource = readFileSync('src/components/pane-shell/tree/renderer/tree-split.tsx', 'utf8')
 
 describe('contribution titlebar surface', () => {
@@ -27,11 +27,9 @@ describe('contribution titlebar surface', () => {
   })
 
   it('opens Bot products in the roster, Bot Chat, and computer layout', () => {
-    expect(source).toContain("group(['hermes-bots:pane-v2'], { id: 'grp-bots' })")
+    expect(source).toContain("group([BOT_ROSTER_PANE_ID], { id: 'grp-bots' })")
     expect(source).toContain("group(['workspace'], { id: 'grp-main' })")
     expect(source).toContain('[1, 3.4]')
-    expect(rightSidebarStoreSource).toContain(
-      'storedBoolean(ORGO_DESKTOP_OPEN_KEY, isBotProduct())'
-    )
+    expect(rightSidebarStoreSource).toContain('storedBoolean(OPEN_KEY, isBotProduct())')
   })
 })

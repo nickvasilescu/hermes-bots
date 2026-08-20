@@ -1,5 +1,3 @@
-import { pathToFileURL } from 'node:url'
-
 import { BrowserWindow, screen } from 'electron'
 
 import { attachRendererConsoleCapture } from './renderer-log'
@@ -18,7 +16,7 @@ interface WakeIndicatorWindowOptions {
   loadWindowUrl: (window: BrowserWindow, url: string, label: string) => void
   log: (message: string) => void
   preloadPath: string
-  rendererIndex: () => string
+  rendererUrl: () => string
   wireWindow: (window: BrowserWindow) => void
 }
 
@@ -28,7 +26,7 @@ export function createWakeIndicatorWindowController({
   loadWindowUrl,
   log,
   preloadPath,
-  rendererIndex,
+  rendererUrl,
   wireWindow
 }: WakeIndicatorWindowOptions) {
   let hideTimer: NodeJS.Timeout | null = null
@@ -40,7 +38,7 @@ export function createWakeIndicatorWindowController({
       return `${devServer.endsWith('/') ? devServer.slice(0, -1) : devServer}/?win=wake#/`
     }
 
-    return `${pathToFileURL(rendererIndex()).toString()}?win=wake#/`
+    return `${rendererUrl()}?win=wake#/`
   }
 
   const selectedDisplay = () => selectWakeIndicatorDisplay(screen.getAllDisplays(), screen.getPrimaryDisplay())

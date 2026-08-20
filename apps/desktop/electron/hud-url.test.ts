@@ -43,3 +43,9 @@ test('buildHudWindowUrl builds a packaged file URL with the flags before the has
 
   assert.match(url, /^file:\/\/.*index\.html\?win=hud&profile=coder#\/abc$/)
 })
+
+test('buildHudWindowUrl supports a secure packaged application origin', () => {
+  const url = buildHudWindowUrl('abc', { profile: 'coder', rendererUrl: 'korgo-app://bundle/index.html' })
+
+  assert.equal(url, 'korgo-app://bundle/index.html?win=hud&profile=coder#/abc')
+})

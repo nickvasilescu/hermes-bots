@@ -1,3 +1,4 @@
+import { getProjectConfig } from '@desktop/project-config-client'
 import type { MutableRefObject } from 'react'
 
 import { followActiveSessionCwd, resolveNewSessionCwd } from '@/store/projects'
@@ -39,7 +40,7 @@ export function startWorkspaceSession({
   const workspaceGeneration = $newChatWorkspaceTargetGeneration.get()
 
   setCurrentCwd(target)
-  void requestGateway<{ branch?: string; cwd?: string }>('config.get', { key: 'project', cwd: target })
+  void getProjectConfig(requestGateway, target)
     .then(info => {
       if ($newChatWorkspaceTargetGeneration.get() !== workspaceGeneration || activeSessionIdRef.current) {
         return

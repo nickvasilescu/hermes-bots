@@ -1,4 +1,5 @@
 import { ActionBarPrimitive, BranchPickerPrimitive, MessagePrimitive, useAuiState } from '@assistant-ui/react'
+import { resolveAgentAvatarProfile } from '@desktop/agent-avatar-client'
 import { type FC, type ReactNode, useCallback, useEffect, useState } from 'react'
 
 import { DirectiveContent } from '@/components/assistant-ui/directive-text'
@@ -15,7 +16,6 @@ import { triggerHaptic } from '@/lib/haptics'
 import { StopFilled } from '@/lib/icons'
 import { profileColor } from '@/lib/profile-color'
 import { cn } from '@/lib/utils'
-import { $gateway } from '@/store/gateway'
 import { notifyThreadEditOpen } from '@/store/thread-scroll'
 import { isWatchWindow } from '@/store/windows'
 
@@ -182,43 +182,17 @@ async function resolveAgentAvatar(handle: string): Promise<AgentAvatarVisual | n
 
   const run = (async (): Promise<AgentAvatarVisual | null> => {
     try {
-      const gateway = $gateway.get()
-
-      if (!gateway) {
-        return null
-      }
-
-      const res = await gateway.request<{
-        profiles?: Array<{ has_avatar?: boolean; name: string; ui_meta?: Record<string, unknown> }>
-      }>('profiles.list', { include_sessions: false })
-
-      const profiles = res?.profiles ?? []
-      let profile = profiles.find(p => p.name.toLowerCase() === key)
-
-      // 'hermes' is the conventional alias for the primary profile.
-      if (!profile && key === 'hermes') {
-        profile = profiles.find(p => p.name === 'default')
-      }
+      const profile = await resolveAgentAvatarProfile(key)
 
       if (!profile) {
         return null
       }
 
       const meta = profile.ui_meta?.['hermes-bots'] as { color?: unknown; shape?: unknown } | undefined
-      let image: null | string = null
-
-      if (profile.has_avatar) {
-        const asset = await gateway.request<{ data?: string; found?: boolean }>('profiles.get_asset', {
-          asset: 'avatar',
-          name: profile.name
-        })
-
-        image = asset?.found && asset.data ? asset.data : null
-      }
 
       return {
         color: typeof meta?.color === 'string' ? meta.color : (profileColor(profile.name) ?? '#9ca3af'),
-        image,
+        image: profile.image,
         shape: typeof meta?.shape === 'string' ? meta.shape : defaultBotAvatarShape(profile.name)
       }
     } catch {
@@ -315,11 +289,7 @@ const AgentMessageNote: FC<{ text: string }> = ({ text }) => {
         {groupHandles.length > 0 ? (
           <span className="flex shrink-0 items-center gap-0.5" data-slot="aui_agent-message-avatar-stack">
             {groupHandles.map((groupHandle, index) => (
-              <AgentAvatar
-                className="size-4"
-                handle={groupHandle}
-                key={`${groupHandle}:${index}`}
-              />
+              <AgentAvatar className="size-4" handle={groupHandle} key={`${groupHandle}:${index}`} />
             ))}
           </span>
         ) : (
@@ -546,10 +516,7 @@ export const UserMessage: FC<{
               >
                 {readOnly ? (
                   // Spectator transcript: fully readable, but never editable.
-                  <div
-                    className={cn(bubbleClassName, 'cursor-default')}
-                    data-slot="aui_user-message-bubble"
-                  >
+                  <div className={cn(bubbleClassName, 'cursor-default')} data-slot="aui_user-message-bubble">
                     {bubbleContent}
                   </div>
                 ) : (

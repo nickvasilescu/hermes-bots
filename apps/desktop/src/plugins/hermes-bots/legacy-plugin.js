@@ -62,6 +62,8 @@ import {
   useQuery,
   useValue
 } from '@hermes/plugin-sdk'
+import { syncConnectorsForRoster } from '@desktop/bot-integration-sync'
+import { IMAGE_UNAVAILABLE_COPY } from '@desktop/bot-image-unavailable-copy'
 import { useEffect, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
@@ -80,65 +82,6 @@ let pluginCtx = null
 
 /** Live roster snapshot for imperative handlers (context menus). */
 const $lastRoster = atom([])
-
-let lastConnectorSyncKey = ''
-
-function rosterNamesForConnectors(roster) {
-  const names = new Set(['default'])
-
-  for (const bot of roster || []) {
-    if (bot?.name) {
-      names.add(bot.name)
-    }
-  }
-
-  return [...names]
-}
-
-function syncConnectorsForRoster(roster, { force = false } = {}) {
-  const names = rosterNamesForConnectors(roster)
-  const key = names.slice().sort().join(',')
-
-  if (!force && key === lastConnectorSyncKey) {
-    return
-  }
-
-  lastConnectorSyncKey = key
-  const syncs = []
-
-  if (typeof host.connectors?.syncProfiles === 'function') {
-    syncs.push(host.connectors.syncProfiles(names))
-  }
-
-  if (typeof host.orgo?.syncProfiles === 'function') {
-    syncs.push(host.orgo.syncProfiles(names))
-  }
-
-  if (syncs.length > 0) {
-    Promise.allSettled(syncs).then(results => {
-      const hasSuccessfulSync = results.some(result => result.status === 'fulfilled')
-
-      if (results.some(result => result.status === 'rejected') && lastConnectorSyncKey === key) {
-        // A transient backend/Orgo failure must not permanently suppress the
-        // next roster-poll retry for these profiles.
-        lastConnectorSyncKey = ''
-      }
-
-      if (!hasSuccessfulSync) {
-        return
-      }
-
-      const sessionId = host.state.activeSessionId?.get?.() || null
-
-      return host
-        .request('reload.mcp', {
-          confirm: true,
-          ...(sessionId ? { session_id: sessionId } : {})
-        })
-        .catch(() => undefined)
-    })
-  }
-}
 
 /** Bots with chat activity the user hasn't seen yet (name -> true).
  *  Fed by the roster poll's activity watermark, so it catches EVERY
@@ -1724,7 +1667,7 @@ function AvatarPicker({ shape, color, image, onShape, onColor, onImage, generate
               className: 'px-2 py-3 text-center text-xs leading-5 text-(--ui-text-tertiary)',
               children:
                 imagen === false
-                  ? 'No image model available. If you just enabled one (or updated Hermes), restart the gateway: Ctrl+K → "Restart gateway".'
+                  ? IMAGE_UNAVAILABLE_COPY
                   : 'Checking image backend…'
             })
         : null,
@@ -6555,4 +6498,3 @@ export default {
     })
   }
 }
-

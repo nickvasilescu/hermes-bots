@@ -1,3 +1,4 @@
+import { SessionActionsMenu, SessionContextMenu } from '@desktop/session-actions-menu'
 import { useStore } from '@nanostores/react'
 import { memo } from 'react'
 import type * as React from 'react'
@@ -42,7 +43,6 @@ import {
   SidebarRowLeadGlyph,
   SidebarRowShell
 } from './chrome'
-import { SessionActionsMenu, SessionContextMenu } from './session-actions-menu'
 import { useProfilePrewarm } from './use-profile-prewarm'
 
 interface SidebarSessionRowProps extends React.ComponentProps<'div'> {

@@ -136,81 +136,92 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
   const rightEdge = { open: fileBrowserOpen, toggle: toggleFileBrowserOpen }
 
   const leftToolbarTools: TitlebarTool[] = [
-    {
-      actionId: 'view.toggleSidebar',
-      hidden: isBotProduct(),
-      icon: <TitlebarIcon name="layout-sidebar-left" />,
-      id: 'sidebar',
-      label: leftEdge.open ? t.titlebar.hideSidebar : t.titlebar.showSidebar,
-      onSelect: () => {
-        triggerHaptic('tap')
-        leftEdge.toggle()
-      }
-    },
-    {
-      actionId: 'view.flipPanes',
-      hidden: isBotProduct(),
-      icon: <TitlebarIcon name="arrow-swap" />,
-      id: 'flip-panes',
-      label: t.titlebar.swapSidebarSides,
-      onSelect: () => {
-        triggerHaptic('tap')
-        togglePanesFlipped()
-      }
-    },
+    ...(import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-ssh-only'
+      ? []
+      : [
+          {
+            actionId: 'view.toggleSidebar',
+            hidden: isBotProduct(),
+            icon: <TitlebarIcon name="layout-sidebar-left" />,
+            id: 'sidebar',
+            label: leftEdge.open ? t.titlebar.hideSidebar : t.titlebar.showSidebar,
+            onSelect: () => {
+              triggerHaptic('tap')
+              leftEdge.toggle()
+            }
+          },
+          {
+            actionId: 'view.flipPanes',
+            hidden: isBotProduct(),
+            icon: <TitlebarIcon name="arrow-swap" />,
+            id: 'flip-panes',
+            label: t.titlebar.swapSidebarSides,
+            onSelect: () => {
+              triggerHaptic('tap')
+              togglePanesFlipped()
+            }
+          }
+        ]),
     ...leftTools
   ]
 
-  const rightSidebarTool: TitlebarTool = {
-    actionId: 'view.toggleRightSidebar',
-    hidden: isBotProduct(),
-    icon: <TitlebarIcon name="layout-sidebar-right" />,
-    id: 'right-sidebar',
-    label: rightEdge.open ? t.titlebar.hideRightSidebar : t.titlebar.showRightSidebar,
-    onSelect: () => {
-      triggerHaptic('tap')
-      rightEdge.toggle()
-    }
-  }
+  const rightSidebarTool: TitlebarTool | null =
+    import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-ssh-only'
+      ? null
+      : {
+          actionId: 'view.toggleRightSidebar',
+          hidden: isBotProduct(),
+          icon: <TitlebarIcon name="layout-sidebar-right" />,
+          id: 'right-sidebar',
+          label: rightEdge.open ? t.titlebar.hideRightSidebar : t.titlebar.showRightSidebar,
+          onSelect: () => {
+            triggerHaptic('tap')
+            rightEdge.toggle()
+          }
+        }
 
   // Static system tools — always pinned to the screen's right edge.
   const systemTools: TitlebarTool[] = [
-    {
-      className: 'group/tool',
-      hidden: isBotProduct(),
-      // Hover + held ⌘/Ctrl morphs the glyph into its reset form (see
-      // LayoutGlyph) — the mod-click telegraphs itself before it happens.
-      icon: <LayoutGlyph modHeld={modHeld} />,
-      id: 'layout',
-      label: t.titlebar.layoutEditor,
-      onSelect: event => {
-        if (event?.metaKey || event?.ctrlKey) {
-          triggerHaptic('warning')
-          resetLayoutTree()
+    ...(import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-ssh-only'
+      ? []
+      : [
+          {
+            className: 'group/tool',
+            hidden: isBotProduct(),
+            // Hover + held ⌘/Ctrl morphs the glyph into its reset form (see
+            // LayoutGlyph) — the mod-click telegraphs itself before it happens.
+            icon: <LayoutGlyph modHeld={modHeld} />,
+            id: 'layout',
+            label: t.titlebar.layoutEditor,
+            onSelect: (event?: MouseEvent) => {
+              if (event?.metaKey || event?.ctrlKey) {
+                triggerHaptic('warning')
+                resetLayoutTree()
 
-          return
-        }
+                return
+              }
 
-        triggerHaptic('open')
-        toggleLayoutEditMode()
-      },
-      title: t.titlebar.layoutEditorTitle
-    },
-    {
-      // No `title`: TitlebarToolButton passes `title` to TipKeybindLabel as a
-      // text OVERRIDE, so a long sentence there replaces the short label and
-      // crowds the ⌘⇧H hint off the tooltip. Label only — the hint is appended
-      // from the action registry, same as every other tool here.
-      actionId: 'view.toggleHud',
-      hidden: isBotProduct(),
-      icon: <TitlebarIcon name="comment-discussion" />,
-      id: 'hud',
-      label: t.titlebar.enterHud,
-      onSelect: () => {
-        triggerHaptic('open')
-        toggleHud(hudTargetSessionId())
-      }
-    },
+              triggerHaptic('open')
+              toggleLayoutEditMode()
+            },
+            title: t.titlebar.layoutEditorTitle
+          },
+          {
+            // No `title`: TitlebarToolButton passes `title` to TipKeybindLabel as a
+            // text OVERRIDE, so a long sentence there replaces the short label and
+            // crowds the ⌘⇧H hint off the tooltip. Label only — the hint is appended
+            // from the action registry, same as every other tool here.
+            actionId: 'view.toggleHud',
+            hidden: isBotProduct(),
+            icon: <TitlebarIcon name="comment-discussion" />,
+            id: 'hud',
+            label: t.titlebar.enterHud,
+            onSelect: () => {
+              triggerHaptic('open')
+              toggleHud(hudTargetSessionId())
+            }
+          }
+        ]),
     {
       active: hapticsMuted,
       icon: <TitlebarIcon name={hapticsMuted ? 'mute' : 'unmute'} />,
@@ -306,7 +317,9 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
         {visibleSystemTools.map(tool => (
           <TitlebarToolButton key={tool.id} navigate={navigate} tool={tool} />
         ))}
-        <TitlebarToolButton navigate={navigate} tool={rightSidebarTool} />
+        {rightSidebarTool && !rightSidebarTool.hidden && (
+          <TitlebarToolButton navigate={navigate} tool={rightSidebarTool} />
+        )}
       </div>
     </>
   )

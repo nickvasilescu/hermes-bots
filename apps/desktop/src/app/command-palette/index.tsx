@@ -1,3 +1,15 @@
+import {
+  PALETTE_CAPABILITY_TABS,
+  PALETTE_NON_CONFIG_SETTINGS,
+  PALETTE_SECTIONS,
+  paletteCommandCenterSystemItems,
+  paletteConfigFieldLabel,
+  paletteConnectorItems,
+  paletteMcpServerItems,
+  paletteMcpServerNames,
+  paletteMiniOwnedNavigationItems,
+  usePaletteConfigRecord
+} from '@desktop/command-palette-settings'
 import { useStore } from '@nanostores/react'
 import { useQuery } from '@tanstack/react-query'
 import { Dialog as DialogPrimitive } from 'radix-ui'
@@ -17,7 +29,7 @@ import { codiconIcon } from '@/components/ui/codicon'
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { HighlightMatches } from '@/components/ui/highlight-matches'
 import { KbdCombo } from '@/components/ui/kbd'
-import { getHermesConfigRecord, listAllProfileSessions } from '@/hermes'
+import { listAllProfileSessions } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { sessionTitle } from '@/lib/chat-runtime'
 import {
@@ -28,35 +40,22 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  Clock,
   Cpu,
   Download,
   Egg,
   GitBranch,
-  Globe,
   type IconComponent,
-  Info,
-  KeyRound,
-  Layers3,
   MessageCircle,
   Monitor,
   Moon,
   Package,
   Palette,
   PawPrint,
-  Plug,
   Plus,
-  RefreshCw,
   Settings,
-  Settings2,
-  SlidersHorizontal,
-  Starmap,
   Sun,
-  Users,
-  Wrench,
   Zap
 } from '@/lib/icons'
-import { allowsGenericHermesUpdates, isSshOnlyProduct } from '@/lib/product'
 import { normalize } from '@/lib/text'
 import { cn } from '@/lib/utils'
 import { resolveVersionStatus } from '@/lib/version-status'
@@ -72,38 +71,27 @@ import { $dismissedAutoProjectIds, filterVisibleProjects } from '@/store/layout'
 import { openPetGenerate } from '@/store/pet-generate'
 import { $projectTree, goToProject, openFolderAsProject, requestStartWorkSession } from '@/store/projects'
 import { $connection } from '@/store/session'
-import { runGatewayRestart } from '@/store/system-actions'
 import {
   $backendUpdateApply,
   $backendUpdateStatus,
   $desktopVersion,
   $updateApply,
-  $updateStatus,
-  requestActiveUpdate
+  $updateStatus
 } from '@/store/updates'
 import { canOpenNewWindow, openNewWindow } from '@/store/windows'
 import { luminance } from '@/themes/color'
 import { type ThemeMode, useTheme } from '@/themes/context'
 import { isUserTheme, resolveTheme } from '@/themes/user-themes'
 
-import { openConnectors } from '../connectors/store'
 import { openSession, openSessionIntentFromModifiers } from '../open-session'
 import {
   AGENTS_ROUTE,
   ARTIFACTS_ROUTE,
   COMMAND_CENTER_ROUTE,
-  CRON_ROUTE,
-  MESSAGING_ROUTE,
   navigateToWorkspacePage,
   NEW_CHAT_ROUTE,
-  PROFILES_ROUTE,
-  SETTINGS_ROUTE,
-  SKILLS_ROUTE,
-  STARMAP_ROUTE
+  SETTINGS_ROUTE
 } from '../routes'
-import { FIELD_LABELS, SECTIONS } from '../settings/constants'
-import { fieldCopyForSchemaKey } from '../settings/field-copy'
-import { prettyName } from '../settings/helpers'
 
 import { usePaletteContributions } from './contrib'
 import { MarketplaceThemePage } from './marketplace-theme-page'
@@ -385,57 +373,6 @@ const toSessionEntry = (session: SessionRow): SessionEntry => ({
   title: sessionTitle(session)
 })
 
-type NonConfigSettingsLabel =
-  | 'about'
-  | 'archivedChats'
-  | 'gateway'
-  | 'keysSettings'
-  | 'keysTools'
-  | 'mcp'
-  | 'providerAccounts'
-  | 'providerApiKeys'
-
-const NON_CONFIG_SETTINGS: ReadonlyArray<{
-  icon: IconComponent
-  keywords?: string[]
-  labelKey: NonConfigSettingsLabel
-  tab: string
-}> = [
-  {
-    icon: Zap,
-    keywords: ['accounts', 'sign in', 'oauth', 'login', 'subscription', 'models', 'anthropic', 'openai'],
-    labelKey: 'providerAccounts',
-    tab: 'providers&pview=accounts'
-  },
-  {
-    icon: KeyRound,
-    keywords: ['providers', 'api key', 'keys', 'secrets', 'tokens', 'egress', 'iron proxy', 'sandbox proxy'],
-    labelKey: 'providerApiKeys',
-    tab: 'providers&pview=keys'
-  },
-  { icon: Globe, keywords: ['connection', 'messaging'], labelKey: 'gateway', tab: 'gateway' },
-  {
-    icon: KeyRound,
-    keywords: ['api', 'secrets', 'tokens', 'credentials', 'browser', 'search'],
-    labelKey: 'keysTools',
-    tab: 'keys&kview=tools'
-  },
-  {
-    icon: Settings2,
-    keywords: ['gateway', 'proxy', 'server', 'webhook', 'env', 'egress proxy', 'iron proxy'],
-    labelKey: 'keysSettings',
-    tab: 'keys&kview=settings'
-  },
-  { icon: Archive, keywords: ['history', 'archived'], labelKey: 'archivedChats', tab: 'sessions' },
-  { icon: Info, keywords: ['version', 'about'], labelKey: 'about', tab: 'about' }
-]
-
-const SSH_ONLY_PALETTE_SECTIONS = SECTIONS.filter(section => ['appearance', 'chat'].includes(section.id))
-
-const SSH_ONLY_NON_CONFIG_SETTINGS = NON_CONFIG_SETTINGS.filter(entry =>
-  ['about', 'archivedChats'].includes(entry.labelKey)
-)
-
 const THEME_MODES: ReadonlyArray<{ icon: IconComponent; mode: ThemeMode }> = [
   { icon: Sun, mode: 'light' },
   { icon: Moon, mode: 'dark' },
@@ -525,9 +462,8 @@ export function CommandPalette() {
 
 function CommandPaletteBody({ onExited }: { onExited: () => void }) {
   const { t } = useI18n()
-  const sshOnly = isSshOnlyProduct()
-  const settingsSections = sshOnly ? SSH_ONLY_PALETTE_SECTIONS : SECTIONS
-  const nonConfigSettings = sshOnly ? SSH_ONLY_NON_CONFIG_SETTINGS : NON_CONFIG_SETTINGS
+  const settingsSections = PALETTE_SECTIONS
+  const nonConfigSettings = PALETTE_NON_CONFIG_SETTINGS
   const pendingPage = useStore($commandPalettePage)
   const bindings = useStore($bindings)
   const worktrees = useStore($repoWorktrees)
@@ -608,10 +544,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
   // exists while the palette is open, so the queries are inherently lazy — no
   // `enabled` gate needed. react-query handles caching/dedup/staleness, so a
   // reopen paints from cache and revalidates in the background.
-  const configQuery = useQuery({
-    queryKey: ['command-palette', 'config'],
-    queryFn: getHermesConfigRecord
-  })
+  const configQuery = usePaletteConfigRecord()
 
   const sessionsQuery = useQuery({
     queryKey: ['command-palette', 'sessions'],
@@ -623,13 +556,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
     queryFn: () => listAllProfileSessions(200, 0, 'only')
   })
 
-  const mcpServers = useMemo(() => {
-    const raw = configQuery.data?.mcp_servers
-
-    return raw && typeof raw === 'object' && !Array.isArray(raw)
-      ? Object.keys(raw as Record<string, unknown>).sort()
-      : []
-  }, [configQuery.data])
+  const mcpServers = useMemo(() => paletteMcpServerNames(configQuery.data), [configQuery.data])
 
   const sessions = useMemo(() => (sessionsQuery.data?.sessions ?? []).map(toSessionEntry), [sessionsQuery.data])
   const archivedSessions = useMemo(() => (archivedQuery.data?.sessions ?? []).map(toSessionEntry), [archivedQuery.data])
@@ -666,15 +593,12 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
   }, [])
 
   const settingsSectionLabel = useCallback(
-    (section: (typeof SECTIONS)[number]) => t.settings.sections[section.id] ?? section.label,
+    (section: (typeof PALETTE_SECTIONS)[number]) => t.settings.sections[section.id] ?? section.label,
     [t.settings.sections]
   )
 
   const configFieldLabel = useCallback(
-    (key: string) =>
-      fieldCopyForSchemaKey(t.settings.fieldLabels, key) ??
-      fieldCopyForSchemaKey(FIELD_LABELS, key) ??
-      prettyName(key.split('.').pop() ?? key),
+    (key: string) => paletteConfigFieldLabel(t.settings.fieldLabels, key),
     [t.settings.fieldLabels]
   )
 
@@ -781,21 +705,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
             label: cc.nav.settings.title,
             run: go(SETTINGS_ROUTE)
           },
-          {
-            action: 'nav.skills',
-            icon: Wrench,
-            id: 'nav-skills',
-            keywords: ['skills', 'tools', 'toolsets', 'mcp', 'capabilities'],
-            label: cc.nav.skills.title,
-            run: go(SKILLS_ROUTE)
-          },
-          {
-            action: 'nav.messaging',
-            icon: MessageCircle,
-            id: 'nav-messaging',
-            label: cc.nav.messaging.title,
-            run: go(MESSAGING_ROUTE)
-          },
+          ...paletteMiniOwnedNavigationItems(t, go),
           {
             action: 'nav.artifacts',
             icon: Package,
@@ -803,23 +713,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
             label: cc.nav.artifacts.title,
             run: go(ARTIFACTS_ROUTE)
           },
-          {
-            action: 'nav.cron',
-            icon: Clock,
-            id: 'nav-cron',
-            keywords: ['schedule', 'jobs'],
-            label: t.shell.statusbar.cron,
-            run: go(CRON_ROUTE)
-          },
-          { action: 'nav.profiles', icon: Users, id: 'nav-profiles', label: t.profiles.title, run: go(PROFILES_ROUTE) },
-          { action: 'nav.agents', icon: Cpu, id: 'nav-agents', label: t.agents.title, run: go(AGENTS_ROUTE) },
-          {
-            icon: Starmap,
-            id: 'nav-starmap',
-            keywords: ['star map', 'memory', 'memories', 'skills', 'graph', 'learning', 'constellation'],
-            label: t.starmap.title,
-            run: go(STARMAP_ROUTE)
-          }
+          { action: 'nav.agents', icon: Cpu, id: 'nav-agents', label: t.agents.title, run: go(AGENTS_ROUTE) }
         ]
       },
       projectGroup,
@@ -869,25 +763,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
             label: cc.sections.usage,
             run: go(`${COMMAND_CENTER_ROUTE}?section=usage`)
           },
-          {
-            icon: RefreshCw,
-            id: 'cc-restart-gateway',
-            keywords: ['gateway', 'restart', 'messaging', 'reconnect', 'system'],
-            label: cc.restartGateway,
-            run: () => void runGatewayRestart()
-          },
-          ...(allowsGenericHermesUpdates()
-            ? [
-                {
-                  detail: updateVersionLabel,
-                  icon: Download,
-                  id: 'cc-update-hermes',
-                  keywords: ['update', 'upgrade', 'hermes', 'version', 'system', 'restart'],
-                  label: cc.updateHermes,
-                  run: () => requestActiveUpdate()
-                }
-              ]
-            : [])
+          ...paletteCommandCenterSystemItems(t, updateVersionLabel)
         ]
       },
       {
@@ -943,17 +819,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
             label: t.settings.nav[entry.labelKey],
             run: go(settingsTab(entry.tab))
           })),
-          ...(!sshOnly
-            ? [
-                {
-                  icon: Plug,
-                  id: 'set-connectors',
-                  keywords: ['plugins', 'connectors', 'composio', 'apps', 'integrations', 'extensions'],
-                  label: t.connectors.title,
-                  run: () => openConnectors()
-                }
-              ]
-            : [])
+          ...paletteConnectorItems(t)
         ]
       }
     ]
@@ -970,7 +836,6 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
     selectTick,
     settingsSections,
     settingsSectionLabel,
-    sshOnly,
     t,
     updateVersionLabel
   ])
@@ -1025,32 +890,17 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
     // jump to the exact tab (matches the "not just the top lvl" ask).
     const capLabel = t.commandCenter.nav.skills.title
 
-    result.push({
-      heading: capLabel,
-      items: [
-        {
-          icon: Wrench,
-          id: 'cap-skills',
-          keywords: ['skills', 'capabilities'],
-          label: `${capLabel}: ${t.skills.tabSkills}`,
-          run: go(`${SKILLS_ROUTE}?tab=skills`)
-        },
-        {
-          icon: SlidersHorizontal,
-          id: 'cap-toolsets',
-          keywords: ['tools', 'toolsets', 'capabilities'],
-          label: `${capLabel}: ${t.skills.tabToolsets}`,
-          run: go(`${SKILLS_ROUTE}?tab=toolsets`)
-        },
-        {
-          icon: Layers3,
-          id: 'cap-mcp',
-          keywords: ['mcp', 'servers', 'tools', 'capabilities', 'model context protocol'],
-          label: `${capLabel}: ${t.skills.tabMcp}`,
-          run: go(`${SKILLS_ROUTE}?tab=mcp`)
-        }
-      ]
-    })
+    const capabilityItems = PALETTE_CAPABILITY_TABS.map(entry => ({
+      icon: entry.icon,
+      id: `cap-${entry.id}`,
+      keywords: [...entry.keywords],
+      label: `${capLabel}: ${t.skills[entry.labelKey]}`,
+      run: go(`/skills?tab=${entry.id}`)
+    }))
+
+    if (capabilityItems.length > 0) {
+      result.push({ heading: capLabel, items: capabilityItems })
+    }
 
     // Apply a theme directly from the root search (e.g. "nous" → Nous). Live
     // preview via keepOpen, mirroring the nested theme picker. If the theme
@@ -1119,16 +969,12 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
 
     result.push({ heading: t.commandCenter.settingsFields, items: fieldItems })
 
-    if (mcpServers.length > 0) {
+    const mcpServerItems = paletteMcpServerItems(mcpServers, go)
+
+    if (mcpServerItems.length > 0) {
       result.push({
         heading: t.commandCenter.mcpServers,
-        items: mcpServers.map(name => ({
-          icon: Wrench,
-          id: `mcp-${name}`,
-          keywords: ['mcp', 'server', 'tool'],
-          label: name,
-          run: go(`${SKILLS_ROUTE}?tab=mcp&server=${encodeURIComponent(name)}`)
-        }))
+        items: [...mcpServerItems]
       })
     }
 

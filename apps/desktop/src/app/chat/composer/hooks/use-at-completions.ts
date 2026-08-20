@@ -1,4 +1,6 @@
 import type { Unstable_TriggerAdapter, Unstable_TriggerItem } from '@assistant-ui/core'
+import { COMPLETION_REF_KINDS, COMPLETION_REF_META } from '@desktop/completion-ref-kinds'
+import { buildPathCompletionParams } from '@desktop/path-completion-params'
 import { useCallback } from 'react'
 
 import { refChipLabel } from '@/components/assistant-ui/directive-text'
@@ -9,27 +11,18 @@ import { normalize } from '@/lib/text'
 import type { CompletionEntry, CompletionPayload } from './use-live-completion-adapter'
 import { useLiveCompletionAdapter } from './use-live-completion-adapter'
 
-const KIND_RE = /^@(file|folder|url|image|tool|git):(.*)$/
-const REF_STARTERS = new Set(['file', 'folder', 'url', 'image', 'tool', 'git'])
-
-const STARTER_META: Record<string, string> = {
-  file: 'Attach a file reference',
-  folder: 'Attach a folder reference',
-  url: 'Attach a URL reference',
-  image: 'Attach an image reference',
-  tool: 'Attach a tool reference',
-  git: 'Attach git context'
-}
+const KIND_RE = new RegExp(`^@(${COMPLETION_REF_KINDS.join('|')}):(.*)$`)
+const REF_STARTERS = new Set<string>(COMPLETION_REF_KINDS)
 
 function starterEntries(query: string): CompletionEntry[] {
   const q = normalize(query)
-  const kinds = Array.from(REF_STARTERS)
+  const kinds = [...COMPLETION_REF_KINDS]
   const filtered = q ? kinds.filter(kind => kind.startsWith(q)) : kinds
 
   return filtered.map(kind => ({
     text: `@${kind}:`,
     display: `@${kind}:`,
-    meta: STARTER_META[kind] || ''
+    meta: COMPLETION_REF_META[kind] || ''
   }))
 }
 
@@ -105,14 +98,10 @@ export function useAtCompletions(options: {
       }
 
       const word = REF_STARTERS.has(query) ? `@${query}:` : `@${query}`
-      const params: Record<string, unknown> = { word }
+      const params = buildPathCompletionParams({ cwd, sessionId, word })
 
-      if (sessionId) {
-        params.session_id = sessionId
-      }
-
-      if (cwd) {
-        params.cwd = cwd
+      if (!params) {
+        return { items: starters, query }
       }
 
       try {

@@ -1,27 +1,20 @@
+import { AboutSettings } from '@desktop/about-settings'
+import { AppearanceSettings } from '@desktop/appearance-settings'
+import { SessionsSettings } from '@desktop/sessions-settings'
 import { useEffect, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 
 import { useI18n } from '@/i18n'
-import { Archive, Bell, Info, Keyboard, Palette } from '@/lib/icons'
+import { Archive, Bell, Info, Palette } from '@/lib/icons'
 
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { OverlayMain, OverlayNav, type OverlayNavGroup, OverlaySplitLayout } from '../overlays/overlay-split-layout'
 import { OverlayView } from '../overlays/overlay-view'
 
-import { AboutSettings } from './about-settings'
-import { AppearanceSettings } from './appearance-settings'
-import { KeybindSettings } from './keybind-settings'
 import { NotificationsSettings } from './notifications-settings'
-import { SessionsSettings } from './sessions-settings'
 import type { SettingsPageProps, SettingsView as SettingsViewId } from './types'
 
-const SSH_ONLY_SETTINGS_VIEWS: readonly SettingsViewId[] = [
-  'config:appearance',
-  'keybinds',
-  'notifications',
-  'sessions',
-  'about'
-]
+const SSH_ONLY_SETTINGS_VIEWS: readonly SettingsViewId[] = ['config:appearance', 'notifications', 'sessions', 'about']
 
 export function settingsViewsForProduct(_sshOnly: boolean): readonly SettingsViewId[] {
   return SSH_ONLY_SETTINGS_VIEWS
@@ -74,13 +67,6 @@ export function SettingsView({ onClose }: SettingsPageProps) {
         onSelect: () => setActiveView('notifications')
       },
       {
-        active: activeView === 'keybinds',
-        icon: Keyboard,
-        id: 'keybinds',
-        label: t.settings.nav.keybinds,
-        onSelect: () => setActiveView('keybinds')
-      },
-      {
         active: activeView === 'sessions',
         icon: Archive,
         id: 'sessions',
@@ -106,8 +92,6 @@ export function SettingsView({ onClose }: SettingsPageProps) {
         <OverlayMain className="px-0 pb-0">
           {activeView === 'about' ? (
             <AboutSettings />
-          ) : activeView === 'keybinds' ? (
-            <KeybindSettings />
           ) : activeView === 'notifications' ? (
             <NotificationsSettings />
           ) : activeView === 'sessions' ? (

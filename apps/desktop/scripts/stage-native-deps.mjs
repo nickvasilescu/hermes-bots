@@ -12,16 +12,7 @@
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve, join } from 'node:path'
-import {
-  chmodSync,
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync
-} from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { isMain } from './utils.mjs'
 
@@ -72,7 +63,7 @@ function copyGlobByExt(srcDir, destDir, extensions) {
       copyGlobByExt(join(srcDir, entry.name), join(destDir, entry.name), extensions)
       continue
     }
-    if (extensions.some((ext) => entry.name.endsWith(ext))) {
+    if (extensions.some(ext => entry.name.endsWith(ext))) {
       mkdirSync(destDir, { recursive: true })
       cpSync(join(srcDir, entry.name), join(destDir, entry.name))
     }
@@ -211,9 +202,7 @@ function validateStagedBinaries(destRoot, targetPlatform) {
   if (mismatches.length > 0) {
     throw new Error(
       `[stage-native-deps] native binary platform mismatch (target=${targetPlatform}):\n` +
-        mismatches
-          .map((m) => `  ${m.file}: expected ${m.expected}, got ${m.classified ?? 'unknown'}`)
-          .join('\n') +
+        mismatches.map(m => `  ${m.file}: expected ${m.expected}, got ${m.classified ?? 'unknown'}`).join('\n') +
         `\nRefusing to stage a binary compiled for the wrong platform.`
     )
   }
@@ -289,13 +278,10 @@ export function stageNodePtyInto(srcRoot, destRoot, { platform = process.platfor
   }
 
   // Check whether a native binary for this target was staged.
-  const stagedDirs = [
-    join(destRoot, 'prebuilds', `${platform}-${arch}`),
-    join(destRoot, 'build/Release')
-  ]
-  const hasNativeBinary = stagedDirs.some((dir) => {
+  const stagedDirs = [join(destRoot, 'prebuilds', `${platform}-${arch}`), join(destRoot, 'build/Release')]
+  const hasNativeBinary = stagedDirs.some(dir => {
     if (!existsSync(dir)) return false
-    return readdirSync(dir, { recursive: true }).some((name) => String(name).endsWith('.node'))
+    return readdirSync(dir, { recursive: true }).some(name => String(name).endsWith('.node'))
   })
 
   if (!hasNativeBinary) {
@@ -313,14 +299,7 @@ export function stageNodePtyInto(srcRoot, destRoot, { platform = process.platfor
       `[stage-native-deps] no native binary for ${platform}-${arch}; ` +
         `running electron-rebuild (target arch: ${arch})...`
     )
-    const rebuildArgs = [
-      '../../node_modules/.bin/electron-rebuild',
-      '-f',
-      '-w',
-      'node-pty',
-      '--arch',
-      arch
-    ]
+    const rebuildArgs = ['../../node_modules/.bin/electron-rebuild', '-f', '-w', 'node-pty', '--arch', arch]
     const result = spawnSync(process.execPath, rebuildArgs, {
       cwd: projectRoot,
       stdio: 'inherit'
@@ -426,11 +405,7 @@ function resolveGetWindowsRoot() {
  */
 const GET_WINDOWS_VERSION = '9.3.0'
 
-export function stageGetWindowsInto(
-  srcRoot,
-  destRoot,
-  { platform = process.platform, rebuild } = {}
-) {
+export function stageGetWindowsInto(srcRoot, destRoot, { platform = process.platform, rebuild } = {}) {
   // The STAGED_WINDOWS_JS rewrite mirrors this exact version's export surface.
   // A version bump must fail the build here until the rewrite is re-verified —
   // otherwise it ships stale and fails soft as a generic "unavailable".
@@ -480,9 +455,7 @@ export function stageGetWindowsInto(
     const scanBindingDirs = () =>
       existsSync(bindingRoot)
         ? readdirSync(bindingRoot).filter(
-            (dir) =>
-              dir.includes(`-${platform}-`) &&
-              existsSync(join(bindingRoot, dir, 'node-get-windows.node'))
+            dir => dir.includes(`-${platform}-`) && existsSync(join(bindingRoot, dir, 'node-get-windows.node'))
           )
         : []
     let bindingDirs = scanBindingDirs()
@@ -491,9 +464,7 @@ export function stageGetWindowsInto(
       // that is already on disk, so every checkout that installed while
       // get-windows was missing from allowScripts stays bricked even after
       // the allowlist is fixed. `npm rebuild` re-runs it.
-      console.log(
-        '[stage-native-deps] get-windows has no win32 binding; running `npm rebuild get-windows`...'
-      )
+      console.log('[stage-native-deps] get-windows has no win32 binding; running `npm rebuild get-windows`...')
       rebuild()
       bindingDirs = scanBindingDirs()
     }
@@ -542,14 +513,33 @@ export function stageGetWindows({ platform = process.platform } = {}) {
   const destRoot = resolve(projectRoot, 'dist/node_modules/get-windows')
   // Only a win32 host can produce the win32 binding, so a cross-platform pack
   // has nothing to gain from the rebuild.
-  const rebuild =
-    platform === 'win32' && process.platform === 'win32' ? rebuildGetWindowsViaNpm : undefined
+  const rebuild = platform === 'win32' && process.platform === 'win32' ? rebuildGetWindowsViaNpm : undefined
   return stageGetWindowsInto(srcRoot, destRoot, { platform, rebuild })
+}
+
+export function removeStagedHostNativeDeps(distRoot = resolve(projectRoot, 'dist')) {
+  const removed = []
+
+  for (const packageName of ['node-pty', 'get-windows']) {
+    const packageRoot = join(distRoot, 'node_modules', packageName)
+
+    if (existsSync(packageRoot)) {
+      rmSync(packageRoot, { force: true, recursive: true })
+      removed.push(packageName)
+    }
+  }
+
+  return removed
 }
 
 // Allow direct CLI invocation: node scripts/stage-native-deps.mjs [platform] [arch]
 if (isMain(import.meta.url)) {
-  const [platform, arch] = process.argv.slice(2)
-  stageNodePty({ platform, arch })
-  stageGetWindows({ platform })
+  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    const removed = removeStagedHostNativeDeps()
+    console.log(`[stage-native-deps] SSH-only SKU excludes host native dependencies (${removed.join(', ') || 'clean'})`)
+  } else {
+    const [platform, arch] = process.argv.slice(2)
+    stageNodePty({ platform, arch })
+    stageGetWindows({ platform })
+  }
 }

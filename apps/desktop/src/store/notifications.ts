@@ -1,3 +1,4 @@
+import { summarizeProviderCredentialError } from '@desktop/notification-provider-errors'
 import { atom } from 'nanostores'
 
 import { translateNow } from '@/i18n'
@@ -102,25 +103,8 @@ const ERROR_SUMMARIES: { test: (msg: string) => boolean; summarize: (msg: string
     summarize: () => translateNow('notifications.errors.gatewayAuthFailed')
   },
   {
-    test: msg => /incorrect api key provided/i.test(msg) || /['"]code['"]\s*:\s*['"]invalid_api_key['"]/i.test(msg),
-    summarize: msg => {
-      const status = msg.match(/(?:error code|status(?:Code)?)[^\d]*(\d{3})/i)?.[1]
-
-      return status
-        ? translateNow('notifications.errors.openaiRejectedApiKeyWithStatus', status)
-        : translateNow('notifications.errors.openaiRejectedApiKey')
-    }
-  },
-  {
-    test: msg => /neither voice_tools_openai_key nor openai_api_key is set/i.test(msg),
-    summarize: () => translateNow('notifications.errors.openaiTtsNeedsKey')
-  },
-  {
-    test: msg => /ELEVENLABS_API_KEY not set/i.test(msg) || /ElevenLabs STT API error \(HTTP 401\)/i.test(msg),
-    summarize: msg =>
-      /ELEVENLABS_API_KEY not set/i.test(msg)
-        ? translateNow('notifications.errors.elevenLabsNeedsKey')
-        : translateNow('notifications.errors.elevenLabsRejectedKey')
+    test: msg => summarizeProviderCredentialError(msg) !== null,
+    summarize: msg => summarizeProviderCredentialError(msg) ?? msg
   },
   {
     test: msg => /method not allowed/i.test(msg),

@@ -1,15 +1,16 @@
-import type { ComponentProps, ReactNode } from 'react'
-import { useMemo } from 'react'
-
-import { ArrowUpRight } from '@/lib/icons'
-
-import { resolveBrandIcon } from './brand-icon'
 import {
   fetchLinkTitle,
   isTitleFetchable,
   resetLinkTitleCache,
   useLinkTitle
 } from '@desktop/link-title-client'
+import { requestOpenExternal } from '@desktop/open-external-client'
+import type { ComponentProps, ReactNode } from 'react'
+import { useMemo } from 'react'
+
+import { ArrowUpRight } from '@/lib/icons'
+
+import { resolveBrandIcon } from './brand-icon'
 import { cn } from './utils'
 
 const URL_RE =
@@ -99,9 +100,7 @@ export function urlSlugTitleLabel(value: string): string {
 export { fetchLinkTitle, isTitleFetchable, useLinkTitle }
 
 export function openExternalLink(href: string): void {
-  if (href) {
-    void window.hermesDesktop?.openExternal?.(href)
-  }
+  requestOpenExternal(href)
 }
 
 interface ExternalLinkProps extends Omit<ComponentProps<'a'>, 'href' | 'target'> {

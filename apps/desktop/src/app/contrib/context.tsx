@@ -1,8 +1,7 @@
+import { StatusbarFallback } from '@desktop/statusbar-fallback'
 import { createContext, memo, useContext } from 'react'
 
 import { DecodeText } from '@/components/ui/decode-text'
-
-import { StatusbarControls } from '../shell/statusbar-controls'
 
 import type { WiringApi } from './types'
 
@@ -22,7 +21,7 @@ export const WiredPane = memo(function WiredPane({ part }: { part: keyof WiringA
 
   if (!api) {
     if (part === 'statusbar') {
-      return <StatusbarControls items={[]} leftItems={[]} />
+      return <StatusbarFallback />
     }
 
     return (

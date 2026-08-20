@@ -1,3 +1,14 @@
+import { BROWSER_SLASH_COMMAND_SPECS } from '@desktop/browser-slash-command'
+import {
+  DEBUG_SLASH_COMMAND_SPECS,
+  HANDOFF_SLASH_COMMAND_SPECS,
+  JOURNEY_SLASH_COMMAND_SPECS,
+  ROLLBACK_SLASH_COMMAND_SPECS,
+  STOP_SLASH_COMMAND_SPECS,
+  TOOLS_SLASH_COMMAND_SPECS,
+  YOLO_SLASH_COMMAND_SPECS
+} from '@desktop/mini-owned-slash-commands'
+
 export interface CommandsCatalogSection {
   name: string
   pairs: [string, string][]
@@ -168,19 +179,14 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
     aliases: ['/fork'],
     surface: action('branch')
   },
-  { name: '/yolo', description: 'Toggle YOLO — auto-approve dangerous commands', surface: action('yolo') },
+  ...YOLO_SLASH_COMMAND_SPECS,
   {
     name: '/wake',
     description: 'Control the desktop wake-word listener [on|off|status]',
     surface: action('wake'),
     argumentMode: 'options'
   },
-  {
-    name: '/handoff',
-    description: 'Hand off this session to a messaging platform',
-    surface: action('handoff'),
-    argumentMode: 'options'
-  },
+  ...HANDOFF_SLASH_COMMAND_SPECS,
   { name: '/profile', description: 'Switch the active Hermes profile', surface: action('profile') },
   {
     name: '/skin',
@@ -190,18 +196,8 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
   },
   { name: '/title', description: 'Rename the current session', surface: action('title'), argumentMode: 'text' },
   { name: '/help', description: 'Show desktop slash commands', aliases: ['/commands'], surface: action('help') },
-  {
-    name: '/browser',
-    description: 'Manage browser CDP connection [connect|disconnect|status] (local gateway only)',
-    surface: action('browser'),
-    argumentMode: 'options'
-  },
-  {
-    name: '/journey',
-    description: 'Open the memory graph — skills + memories over time',
-    aliases: ['/learning', '/memory-graph'],
-    surface: action('journey')
-  },
+  ...BROWSER_SLASH_COMMAND_SPECS,
+  ...JOURNEY_SLASH_COMMAND_SPECS,
 
   // Overlay pickers
   { name: '/model', description: 'Switch the model for this session', surface: picker('model'), hidden: true },
@@ -259,7 +255,7 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
     surface: action('compress'),
     argumentMode: 'text'
   },
-  { name: '/debug', description: 'Create a debug report', surface: exec() },
+  ...DEBUG_SLASH_COMMAND_SPECS,
   {
     name: '/goal',
     description: 'Manage the standing goal for this session',
@@ -292,7 +288,7 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
     argumentMode: 'text'
   },
   { name: '/retry', description: 'Retry the last user message', surface: exec() },
-  { name: '/rollback', description: 'List or restore filesystem checkpoints', surface: exec() },
+  ...ROLLBACK_SLASH_COMMAND_SPECS,
   {
     name: '/save',
     description: 'Save the current transcript to JSON',
@@ -309,13 +305,8 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
     surface: exec(),
     argumentMode: 'text'
   },
-  { name: '/stop', description: 'Stop running background processes', surface: exec() },
-  {
-    name: '/tools',
-    description: 'List or toggle tools available to the agent',
-    surface: exec(),
-    argumentMode: 'options'
-  },
+  ...STOP_SLASH_COMMAND_SPECS,
+  ...TOOLS_SLASH_COMMAND_SPECS,
   { name: '/undo', description: 'Remove the last user/assistant exchange', surface: exec() },
   { name: '/usage', description: 'Show token usage for this session', surface: exec() },
   { name: '/version', description: 'Show Hermes Agent version', surface: exec() },

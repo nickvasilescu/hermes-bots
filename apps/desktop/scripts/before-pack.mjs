@@ -60,7 +60,7 @@
 import { existsSync, rmSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { Arch } from 'electron-builder'
-import { stageNodePty, stageGetWindows } from './stage-native-deps.mjs'
+import { removeStagedHostNativeDeps, stageNodePty, stageGetWindows } from './stage-native-deps.mjs'
 
 export function cleanStaleAppOutDir(appOutDir) {
   if (!appOutDir || typeof appOutDir !== 'string') {
@@ -133,7 +133,10 @@ export default async function beforePack(context) {
   try {
     const platform = context && context.electronPlatformName
     const archName = context && typeof context.arch === 'number' ? Arch[context.arch] : undefined
-    if (platform && archName) {
+    if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+      const removed = removeStagedHostNativeDeps()
+      console.log(`[before-pack] SSH-only SKU excludes host native dependencies (${removed.join(', ') || 'clean'})`)
+    } else if (platform && archName) {
       if (archName === 'universal') {
         console.warn(
           '[before-pack] target arch is "universal" — node-pty has no universal prebuild; ' +

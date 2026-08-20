@@ -1,19 +1,11 @@
 'use client'
 
+import { ApprovalMoreOptions } from '@desktop/approval-options'
 import { useStore } from '@nanostores/react'
 import { type FC, useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useSessionView } from '@/app/chat/session-view'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle
-} from '@/components/ui/dialog'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { AlertCircle, ChevronDown, Loader2 } from '@/lib/icons'
@@ -107,21 +99,13 @@ const ApprovalBar: FC<{ request: ApprovalRequest; surface: 'floating' | 'inline'
   const copy = t.assistant.approval
   const gateway = useStore($gateway)
   const [submitting, setSubmitting] = useState<ApprovalChoice | null>(null)
-  // "Always allow" persists the pattern to ~/.hermes/config.yaml permanently, so
-  // it goes through a confirm step rather than firing straight from the menu.
-  const [confirmAlways, setConfirmAlways] = useState(false)
+  const [approvalOptionsOpen, setApprovalOptionsOpen] = useState(false)
   // The pending tool row only shows a single truncated line of the command, and
   // a pending row can't be expanded (no result yet), so the full command was
   // previously only reachable via the "Always allow" modal. Let the user reveal
   // it inline instead — "expand, Run" (2 clicks) rather than the modal dance.
   const [showCommand, setShowCommand] = useState(false)
   const busy = submitting !== null
-  // false when the backend won't honor a permanent allow (tirith warning) → hide "Always allow".
-  const allowPermanent = request.allowPermanent !== false
-  const choices = request.choices ?? (request.smartDenied ? ['once', 'deny'] : undefined)
-  const allowSession = choices ? choices.includes('session') : true
-  const allowAlways = choices ? choices.includes('always') : allowPermanent
-  const hasMoreOptions = allowSession || allowAlways
   const hasCommand = request.command.trim().length > 0
 
   const respond = useCallback(
@@ -160,7 +144,7 @@ const ApprovalBar: FC<{ request: ApprovalRequest; surface: 'floating' | 'inline'
   // While the confirm dialog is open it owns the keyboard (Esc closes it), so
   // the strip-level shortcuts stand down to avoid denying the whole approval.
   useEffect(() => {
-    if (confirmAlways) {
+    if (approvalOptionsOpen) {
       return
     }
 
@@ -177,7 +161,7 @@ const ApprovalBar: FC<{ request: ApprovalRequest; surface: 'floating' | 'inline'
     window.addEventListener('keydown', onKeyDown, true)
 
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [confirmAlways, respond])
+  }, [approvalOptionsOpen, respond])
 
   return (
     <div
@@ -196,42 +180,13 @@ const ApprovalBar: FC<{ request: ApprovalRequest; surface: 'floating' | 'inline'
             {submitting === 'once' ? <Loader2 className="size-3 animate-spin" /> : copy.run}
             {submitting !== 'once' && <span className="text-[0.625rem] text-primary/60">{isMac ? '⌘⏎' : 'Ctrl⏎'}</span>}
           </Button>
-          {hasMoreOptions && <span aria-hidden className="w-px self-stretch bg-primary/20" />}
-          {hasMoreOptions && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  aria-label={copy.moreOptions}
-                  className="h-full w-5 rounded-none px-0 text-primary hover:bg-primary/15 hover:text-primary"
-                  disabled={busy}
-                  size="xs"
-                  variant="ghost"
-                >
-                  <ChevronDown className="size-3" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="min-w-44">
-                {allowSession && (
-                  <DropdownMenuItem onSelect={() => void respond('session')}>{copy.allowSession}</DropdownMenuItem>
-                )}
-                {allowAlways && (
-                  <DropdownMenuItem
-                    onSelect={() => {
-                      // Defer one tick so the menu fully unmounts before the dialog
-                      // mounts — otherwise Radix's focus-return races the dialog and
-                      // dismisses it via onInteractOutside.
-                      setTimeout(() => setConfirmAlways(true), 0)
-                    }}
-                  >
-                    {copy.alwaysAllowMenu}
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuItem onSelect={() => void respond('deny')} variant="destructive">
-                  {copy.reject}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+          <ApprovalMoreOptions
+            busy={busy}
+            copy={{ ...copy, cancel: t.common.cancel }}
+            onConfirmChange={setApprovalOptionsOpen}
+            request={request}
+            respond={respond}
+          />
         </div>
 
         <Button
@@ -264,37 +219,6 @@ const ApprovalBar: FC<{ request: ApprovalRequest; surface: 'floating' | 'inline'
           {request.command.trim()}
         </pre>
       )}
-
-      <Dialog onOpenChange={setConfirmAlways} open={confirmAlways}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>{copy.alwaysTitle}</DialogTitle>
-            <DialogDescription>{copy.alwaysDescription(request.description)}</DialogDescription>
-          </DialogHeader>
-
-          {request.command.trim() && (
-            <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md border border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) px-2.5 py-1.5 font-mono text-xs leading-snug text-foreground">
-              {request.command.trim()}
-            </pre>
-          )}
-
-          <DialogFooter>
-            <Button onClick={() => setConfirmAlways(false)} size="sm" variant="ghost">
-              {t.common.cancel}
-            </Button>
-            <Button
-              onClick={() => {
-                setConfirmAlways(false)
-                void respond('always')
-              }}
-              size="sm"
-              variant="destructive"
-            >
-              {copy.alwaysAllow}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

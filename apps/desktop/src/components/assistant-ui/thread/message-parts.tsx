@@ -4,6 +4,7 @@ import {
   useAuiState,
   useMessagePartReasoning
 } from '@assistant-ui/react'
+import { McpSetupTool } from '@desktop/mcp-setup-tool'
 import { useStore } from '@nanostores/react'
 import {
   type ComponentProps,
@@ -20,7 +21,6 @@ import {
 import { useSessionView } from '@/app/chat/session-view'
 import { ClarifyTool } from '@/components/assistant-ui/clarify-tool'
 import { MarkdownText, MarkdownTextContent } from '@/components/assistant-ui/markdown-text'
-import { McpSetupTool } from '@/components/assistant-ui/mcp-setup-tool'
 import { APPROVAL_TOOLS } from '@/components/assistant-ui/tool/approval'
 import { DelegateTool } from '@/components/assistant-ui/tool/delegate'
 import { ToolFallback, ToolGroupSlot } from '@/components/assistant-ui/tool/fallback'

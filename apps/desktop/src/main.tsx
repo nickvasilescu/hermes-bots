@@ -56,10 +56,10 @@ if (winParam === 'hud') {
 }
 
 if (winParam === 'overlay') {
-  void import('./app/pet-overlay/overlay-root').then(({ mountPetOverlay }) => mountPetOverlay())
-} else if (winParam === 'quick') {
+  void import('@desktop/pet-overlay-root').then(({ mountPetOverlay }) => mountPetOverlay())
+} else if (winParam === 'quick' && import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
   void import('./app/quick-entry/quick-entry-root').then(({ mountQuickEntry }) => mountQuickEntry())
-} else if (winParam === 'wake') {
+} else if (winParam === 'wake' && import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
   void import('./app/wake-indicator/wake-indicator-root').then(({ mountWakeIndicator }) => mountWakeIndicator())
 } else {
   createRoot(document.getElementById('root')!).render(

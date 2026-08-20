@@ -43,6 +43,18 @@ const preloadSkuIntegration = resolve(
   root,
   sku === 'bot-ssh-only' ? 'electron/sku-integrations.preload.disabled.ts' : 'electron/sku-integrations.preload.full.ts'
 )
+const preloadHostToolsIntegration = resolve(
+  root,
+  sku === 'bot-ssh-only'
+    ? 'electron/sku-integrations.host-tools.preload.disabled.ts'
+    : 'electron/sku-integrations.host-tools.preload.full.ts'
+)
+const nodePtyIntegration = resolve(
+  root,
+  sku === 'bot-ssh-only'
+    ? 'electron/sku-integrations.node-pty.disabled.ts'
+    : 'electron/sku-integrations.node-pty.full.ts'
+)
 const mainSkuIntegration = resolve(
   root,
   sku === 'bot-ssh-only' ? 'electron/sku-integrations.disabled.ts' : 'electron/sku-integrations.full.ts'
@@ -68,6 +80,8 @@ const oauthNetIntegration = resolve(root, 'electron/sku-integrations.oauth-net.d
 const skuIntegrationAliases = {
   './link-title-integration': linkTitleIntegration,
   './sku-integrations.preload': preloadSkuIntegration,
+  './sku-integrations.host-tools.preload': preloadHostToolsIntegration,
+  './sku-integrations.node-pty': nodePtyIntegration,
   './sku-integrations': mainSkuIntegration,
   './sku-integrations.windows-sandbox': windowsSandboxIntegration,
   './ipc-channel-policy': ipcChannelPolicy,
@@ -91,6 +105,12 @@ const skuIntegrationPlugin = {
       path: skuIntegrationAliases[args.path]
     }))
     build.onResolve({ filter: /^\.\/sku-integrations\.preload$/ }, args => ({
+      path: skuIntegrationAliases[args.path]
+    }))
+    build.onResolve({ filter: /^\.\/sku-integrations\.host-tools\.preload$/ }, args => ({
+      path: skuIntegrationAliases[args.path]
+    }))
+    build.onResolve({ filter: /^\.\/sku-integrations\.node-pty$/ }, args => ({
       path: skuIntegrationAliases[args.path]
     }))
     build.onResolve({ filter: /^\.\/sku-integrations$/ }, args => ({

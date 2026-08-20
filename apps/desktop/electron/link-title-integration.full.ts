@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process'
 
-import { app, BrowserWindow, session, type IpcMain } from 'electron'
+import { app, BrowserWindow, type IpcMain, session } from 'electron'
 
-import { hiddenWindowsChildOptions } from './windows-child-options'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
+import { hiddenWindowsChildOptions } from './windows-child-options'
 
 const titleCache = new Map<string, string>()
 const titleInflight = new Map<string, Promise<string>>()
@@ -11,10 +11,13 @@ const TITLE_CACHE_LIMIT = 500
 const TITLE_BYTE_BUDGET = 96 * 1024
 const TITLE_TIMEOUT_MS = 5000
 const TITLE_MAX_REDIRECTS = 3
+
 const TITLE_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36'
+
 const TITLE_ERROR_RE =
   /\b(access denied|attention required|captcha|error|forbidden|just a moment|request blocked|too many requests)\b/i
+
 const HTML_ENTITIES: Record<string, string> = {
   amp: '&',
   lt: '<',
@@ -24,9 +27,11 @@ const HTML_ENTITIES: Record<string, string> = {
   nbsp: ' ',
   '#39': "'"
 }
+
 const RENDER_TITLE_MAX_CONCURRENT = 2
 const RENDER_TITLE_TIMEOUT_MS = 8000
 const RENDER_TITLE_GRACE_MS = 700
+
 const RENDER_TITLE_BLOCKED_RESOURCES = new Set([
   'cspReport',
   'font',
@@ -44,7 +49,7 @@ const renderTitleQueue: Array<{ resolve: (title: string) => void; url: string }>
 function canonicalTitleCacheKey(rawUrl: unknown): string {
   const value = String(rawUrl || '').trim()
 
-  if (!value) return ''
+  if (!value) {return ''}
 
   try {
     const url = new URL(value)
@@ -60,8 +65,10 @@ function canonicalTitleCacheKey(rawUrl: unknown): string {
 function cacheTitle(key: string, title: string): void {
   if (titleCache.size >= TITLE_CACHE_LIMIT) {
     const first = titleCache.keys().next().value
-    if (first) titleCache.delete(first)
+
+    if (first) {titleCache.delete(first)}
   }
+
   titleCache.set(key, title)
 }
 
@@ -81,7 +88,8 @@ function parseHtmlTitle(html: string): string {
 function fetchHtmlTitleWithCurl(rawUrl: string): Promise<string> {
   return new Promise(resolve => {
     const url = String(rawUrl || '').trim()
-    if (!url) return resolve('')
+
+    if (!url) {return resolve('')}
 
     const child = spawn(
       'curl',
@@ -108,11 +116,12 @@ function fetchHtmlTitleWithCurl(rawUrl: string): Promise<string> {
       ],
       hiddenWindowsChildOptions({ stdio: ['ignore', 'pipe', 'ignore'] })
     )
+
     const chunks: Buffer[] = []
     let bytes = 0
 
     child.stdout.on('data', chunk => {
-      if (bytes >= TITLE_BYTE_BUDGET) return
+      if (bytes >= TITLE_BYTE_BUDGET) {return}
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
       const next = buffer.subarray(0, TITLE_BYTE_BUDGET - bytes)
       chunks.push(next)
@@ -124,7 +133,7 @@ function fetchHtmlTitleWithCurl(rawUrl: string): Promise<string> {
 }
 
 function getLinkTitleSession(): Electron.Session | null {
-  if (linkTitleSession || !app.isReady()) return linkTitleSession
+  if (linkTitleSession || !app.isReady()) {return linkTitleSession}
 
   linkTitleSession = session.fromPartition('hermes:link-titles', { cache: false })
   linkTitleSession.webRequest.onBeforeRequest((details, callback) => {
@@ -138,7 +147,8 @@ function getLinkTitleSession(): Electron.Session | null {
 function dequeueRenderTitle(): void {
   while (renderTitleInFlight < RENDER_TITLE_MAX_CONCURRENT && renderTitleQueue.length) {
     const item = renderTitleQueue.shift()
-    if (!item) return
+
+    if (!item) {return}
     renderTitleInFlight += 1
     void runRenderTitleJob(item.url).then(title => {
       renderTitleInFlight -= 1
@@ -151,23 +161,29 @@ function dequeueRenderTitle(): void {
 function runRenderTitleJob(rawUrl: string): Promise<string> {
   return new Promise(resolve => {
     const partitionSession = getLinkTitleSession()
-    if (!app.isReady() || !partitionSession) return resolve('')
+
+    if (!app.isReady() || !partitionSession) {return resolve('')}
 
     let settled = false
     let window: BrowserWindow | null = null
     let hardTimer: ReturnType<typeof setTimeout> | null = null
     let graceTimer: ReturnType<typeof setTimeout> | null = null
+
     const finish = (title: string) => {
-      if (settled) return
+      if (settled) {return}
       settled = true
-      if (hardTimer) clearTimeout(hardTimer)
-      if (graceTimer) clearTimeout(graceTimer)
+
+      if (hardTimer) {clearTimeout(hardTimer)}
+
+      if (graceTimer) {clearTimeout(graceTimer)}
       const value = (title || '').replace(/\s+/g, ' ').trim()
+
       try {
-        if (window && !window.isDestroyed()) window.destroy()
+        if (window && !window.isDestroyed()) {window.destroy()}
       } catch {
         // The short-lived window may already be gone.
       }
+
       resolve(value)
     }
 
@@ -178,16 +194,18 @@ function runRenderTitleJob(rawUrl: string): Promise<string> {
     }
 
     const finishWithTitle = () => finish(readLinkTitleWindowTitle(window))
+
     const scheduleGrace = () => {
-      if (graceTimer) clearTimeout(graceTimer)
+      if (graceTimer) {clearTimeout(graceTimer)}
       graceTimer = setTimeout(finishWithTitle, RENDER_TITLE_GRACE_MS)
     }
+
     hardTimer = setTimeout(finishWithTitle, RENDER_TITLE_TIMEOUT_MS)
     window.webContents.setUserAgent(TITLE_USER_AGENT)
     window.webContents.on('page-title-updated', scheduleGrace)
     window.webContents.on('did-finish-load', scheduleGrace)
     window.webContents.on('did-fail-load', (_event, _code, _description, _url, isMainFrame) => {
-      if (isMainFrame) finish('')
+      if (isMainFrame) {finish('')}
     })
     void window
       .loadURL(rawUrl, { httpReferrer: 'https://www.google.com/', userAgent: TITLE_USER_AGENT })
@@ -209,10 +227,13 @@ function usableTitle(value: string): string {
 function fetchLinkTitle(rawUrl: unknown): Promise<string> {
   const url = String(rawUrl || '').trim()
   const key = canonicalTitleCacheKey(url)
-  if (!key) return Promise.resolve('')
-  if (titleCache.has(key)) return Promise.resolve(titleCache.get(key) ?? '')
+
+  if (!key) {return Promise.resolve('')}
+
+  if (titleCache.has(key)) {return Promise.resolve(titleCache.get(key) ?? '')}
   const active = titleInflight.get(key)
-  if (active) return active
+
+  if (active) {return active}
 
   const pending = fetchHtmlTitleWithCurl(url)
     .catch(() => '')
@@ -221,8 +242,10 @@ function fetchLinkTitle(rawUrl: unknown): Promise<string> {
     .then(clean => {
       cacheTitle(key, clean)
       titleInflight.delete(key)
+
       return clean
     })
+
   titleInflight.set(key, pending)
 
   return pending

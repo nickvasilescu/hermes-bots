@@ -1,3 +1,8 @@
+import { McpTab } from '@desktop/mcp-tab'
+import { SKILLS_MODES, SKILLS_TABS } from '@desktop/skills-modes'
+import { ComputerUsePanel } from '@desktop/toolset-computer-use-panel'
+import { ToolsetConfigPanel } from '@desktop/toolset-config-panel'
+import { TerminalBackendPanel } from '@desktop/toolset-terminal-backend-panel'
 import { useStore } from '@nanostores/react'
 import { useQuery } from '@tanstack/react-query'
 import type * as React from 'react'
@@ -49,17 +54,11 @@ import {
 import { PanelEmpty, PanelPill } from '../overlays/panel'
 import { PageSearchShell } from '../page-search-shell'
 import { SETTINGS_ROUTE } from '../routes'
-import { ComputerUsePanel } from '../settings/computer-use-panel'
 import { asText, includesQuery, prettyName, toolNames, toolsetDisplayLabel } from '../settings/helpers'
-import { TerminalBackendPanel } from '../settings/terminal-backend-panel'
-import { ToolsetConfigPanel } from '../settings/toolset-config-panel'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
 import { SkillsHub } from './hub'
-import { McpTab } from './mcp-tab'
 import { $skillsSortDesc, $toolsetsSortDesc } from './store'
-
-const SKILLS_MODES = ['skills', 'toolsets', 'mcp', 'hub'] as const
 
 // Skills + toolsets live in the RQ cache so switching tabs/pages paints the
 // cached lists instantly (no reload flash) and mount only fires a deduped
@@ -558,12 +557,18 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
             : t.skills.searchToolsets
       }
       searchValue={query}
-      tabs={[
-        { id: 'skills', label: t.skills.tabSkills, meta: skills?.length ?? null },
-        { id: 'toolsets', label: t.skills.tabToolsets, meta: toolsets ? visibleToolsetCount(toolsets) : null },
-        { id: 'mcp', label: t.skills.tabMcp },
-        { id: 'hub', label: t.skills.tabHub }
-      ]}
+      tabs={SKILLS_TABS.map(tab => ({
+        id: tab.id,
+        label: t.skills[tab.labelKey],
+        meta:
+          tab.id === 'skills'
+            ? (skills?.length ?? null)
+            : tab.id === 'toolsets'
+              ? toolsets
+                ? visibleToolsetCount(toolsets)
+                : null
+              : undefined
+      }))}
     >
       {mode === 'hub' ? (
         <SkillsHub query={query} />

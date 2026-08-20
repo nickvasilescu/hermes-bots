@@ -60,6 +60,8 @@ vi.mock('./providers-settings', () => ({
 }))
 vi.mock('./sessions-settings', () => ({ SessionsSettings: () => <div>sessions-panel</div> }))
 
+import { settingsViewsForProduct as settingsViewsForCompiledSshSku } from './index.disabled'
+
 import { resolveSettingsView, SettingsView, settingsViewsForProduct } from './index'
 
 function LocationProbe() {
@@ -87,6 +89,10 @@ afterEach(() => {
 })
 
 describe('SSH-only settings policy', () => {
+  it('omits the keybind editor because the SSH runtime has no rebindable dispatcher', () => {
+    expect(settingsViewsForCompiledSshSku(true)).not.toContain('keybinds')
+  })
+
   it('keeps only presentation and session settings in the SSH SKU', () => {
     expect(settingsViewsForProduct(true)).toEqual([
       'config:appearance',

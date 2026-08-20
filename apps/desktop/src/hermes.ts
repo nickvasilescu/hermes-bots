@@ -1,7 +1,8 @@
+import { saveHermesConfigForSku } from '@desktop/config-write-client'
 import { JsonRpcGatewayClient } from '@hermes/shared'
 
-import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
 import { openAuxiliaryGatewaySocket } from '@/lib/native-gateway-socket'
+import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
 import type {
   ActionResponse,
   ActionStatusResponse,
@@ -855,12 +856,7 @@ export function getHermesConfigSchema(): Promise<ConfigSchemaResponse> {
 }
 
 export function saveHermesConfig(config: HermesConfigRecord, profile?: null | string): Promise<{ ok: boolean }> {
-  return window.hermesDesktop.api<{ ok: boolean }>({
-    ...profileScoped(profile),
-    path: '/api/config',
-    method: 'PUT',
-    body: { config }
-  })
+  return saveHermesConfigForSku(config, profile, profileScoped)
 }
 
 // surface=declared serves the curated desktop schema; the dashboard consumes the raw plugin schema.

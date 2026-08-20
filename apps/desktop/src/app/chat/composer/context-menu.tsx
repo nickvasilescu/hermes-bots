@@ -184,7 +184,7 @@ interface ContextMenuItemProps {
   onSelect?: () => void
 }
 
-interface ContextMenuProps {
+export interface ContextMenuProps {
   onInsertText: (text: string) => void
   onOpenUrlDialog: () => void
   onPasteClipboardImage?: (opts?: { silent?: boolean }) => Promise<boolean> | void

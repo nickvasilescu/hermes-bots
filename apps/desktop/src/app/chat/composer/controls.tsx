@@ -50,6 +50,22 @@ interface ConversationProps {
   onToggleMute: () => void
 }
 
+export interface ComposerControlsProps {
+  autoSpeak: boolean
+  busy: boolean
+  busyAction: 'steer' | 'queue' | 'stop'
+  canSubmit: boolean
+  compactModelPill?: boolean
+  conversation: ConversationProps
+  disabled: boolean
+  hasComposerPayload: boolean
+  state: ChatBarState
+  voiceStatus: VoiceStatus
+  onDictate: () => void
+  onQueue: () => void
+  onToggleAutoSpeak: () => void
+}
+
 export function ComposerControls({
   autoSpeak,
   busy,
@@ -64,21 +80,7 @@ export function ComposerControls({
   onDictate,
   onQueue,
   onToggleAutoSpeak
-}: {
-  autoSpeak: boolean
-  busy: boolean
-  busyAction: 'steer' | 'queue' | 'stop'
-  canSubmit: boolean
-  compactModelPill?: boolean
-  conversation: ConversationProps
-  disabled: boolean
-  hasComposerPayload: boolean
-  state: ChatBarState
-  voiceStatus: VoiceStatus
-  onDictate: () => void
-  onQueue: () => void
-  onToggleAutoSpeak: () => void
-}) {
+}: ComposerControlsProps) {
   const { t } = useI18n()
   const c = t.composer
 

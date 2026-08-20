@@ -1,13 +1,22 @@
+import { reportMcpToolResult } from '@desktop/mcp-repair-provider'
+import { handleMiniOwnedGatewayEvent } from '@desktop/mini-owned-gateway-events'
+import { requestDesktopOnboarding, requestDesktopOnboardingForCredentialWarning } from '@desktop/onboarding-events'
+import {
+  burstVibeHearts,
+  flashPetActivity,
+  markPetUnread,
+  notifyPetChanged,
+  type PetChangeMeta,
+  setPetActivity
+} from '@desktop/pet-event-actions'
+import { followActiveSessionCwd } from '@desktop/project-event-actions'
+import { isProviderSetupErrorMessage } from '@desktop/provider-setup-errors'
+import { invalidateSkillSuggestionIndex } from '@desktop/skill-suggestion-provider'
 import type { BillingBlock } from '@hermes/shared'
 import type { HermesSkin } from '@hermes/shared/skin'
 import type { QueryClient } from '@tanstack/react-query'
 import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
 
-import { readActivePreview } from '@/app/chat/right-rail/preview-reader'
-import { writeAgentTerminalChunk } from '@/app/right-sidebar/terminal/agent-terminal-stream'
-import { readActiveTerminal } from '@/app/right-sidebar/terminal/buffer'
-import { closeAgentTerminalByProc } from '@/app/right-sidebar/terminal/terminals'
-import { burstVibeHearts } from '@/components/chat/vibe-hearts'
 import { translateNow } from '@/i18n'
 import { type GatewayEventPayload, textPart } from '@/lib/chat-messages'
 import { coerceGatewayText, coerceThinkingText, normalizePersonalityValue } from '@/lib/chat-runtime'
@@ -15,7 +24,6 @@ import { playCompletionSound } from '@/lib/completion-sound'
 import { resolveGatewayEventSessionId } from '@/lib/gateway-events'
 import { triggerHaptic } from '@/lib/haptics'
 import { modelOptionsQueryKey } from '@/lib/model-options'
-import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { invalidateSlashCompletions } from '@/lib/slash-completion-cache'
 import { type AgentNoticePayload, clearAgentNotice, nativeNoticeInput, showAgentNotice } from '@/store/agent-notices'
 import { reconcileApprovalModeForProfile } from '@/store/approval-mode'
@@ -23,26 +31,18 @@ import { billingCtaLabel, clearBillingBlock, runBillingRecovery, setBillingBlock
 import { clearClarifyRequest, normalizeChoices, setClarifyRequest, warnDroppedChoices } from '@/store/clarify'
 import { setSessionCompacting } from '@/store/compaction'
 import { refreshBackgroundProcesses } from '@/store/composer-status'
-import { $gateway } from '@/store/gateway'
 import { applyGoalStatusText } from '@/store/goals'
 import {
   notifyCronChanged,
   notifyPairingChanged,
-  notifyPetChanged,
   notifyPlatformsChanged,
   notifySessionsChanged,
-  type PetChangeMeta,
   setChangeEventsAvailable
 } from '@/store/live-sync'
-import { setMcpSetupRequest } from '@/store/mcp-setup'
 import { dispatchNativeNotification } from '@/store/native-notifications'
 import { isDiskFullErrorMessage, notify, notifyError } from '@/store/notifications'
-import { requestDesktopOnboarding, requestDesktopOnboardingForCredentialWarning } from '@/store/onboarding'
-import { revealDesktopPane } from '@/store/pane-focus'
-import { flashPetActivity, markPetUnread, setPetActivity } from '@/store/pet'
 import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
-import { followActiveSessionCwd } from '@/store/projects'
-import { clearAllPrompts, setApprovalRequest, setSecretRequest, setSudoRequest } from '@/store/prompts'
+import { clearAllPrompts, setApprovalRequest } from '@/store/prompts'
 import { recordAgentReaction } from '@/store/reactions-local'
 import {
   $currentCwd,
@@ -67,8 +67,6 @@ import {
 } from '@/store/session'
 import { dropSessionState } from '@/store/session-states'
 import { pruneDelegateFallbackSubagents, pruneFinishedSessionSubagents, upsertSubagent } from '@/store/subagents'
-import { reportMcpToolResult } from '@/store/suggestion-providers/repair'
-import { invalidateSkillSuggestionIndex } from '@/store/suggestion-providers/skill'
 import { clearActiveSessionTodos } from '@/store/todos'
 import { recordToolDiff } from '@/store/tool-diffs'
 import { setSessionDraftingTool } from '@/store/tool-drafting'
@@ -983,37 +981,19 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             title: translateNow('notifications.native.inputTitle')
           })
         }
-      } else if (event.type === 'mcp.setup.request') {
-        // setup_mcp tool (desktop GUI): the agent proposed an MCP server and
-        // the Python side is blocked on mcp.setup.respond. Park the request
-        // per-session (like clarify) and upsert a stable pending tool row so
-        // the inline consent card has somewhere to render even when the
-        // tool.start event was missed (stream reconnect / hydration race).
-        const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
-        const server = typeof payload?.server === 'string' ? payload.server : ''
-        const rawAction = typeof payload?.action === 'string' ? payload.action : 'install'
-        const action = rawAction === 'enable' || rawAction === 'authorize' ? rawAction : 'install'
-        const reason = typeof payload?.reason === 'string' ? payload.reason : ''
-
-        if (requestId && server) {
-          setMcpSetupRequest({ action, reason, requestId, server, sessionId: sessionId ?? null })
-
-          if (sessionId) {
-            upsertToolCall(
-              sessionId,
-              { args: { action, reason, server }, name: 'setup_mcp', tool_id: requestId },
-              'running'
-            )
-            updateSessionState(sessionId, state => ({ ...state, needsInput: true }))
-          }
-
-          dispatchNativeNotification({
-            body: reason || server,
-            kind: 'input',
-            sessionId,
-            title: translateNow('notifications.native.inputTitle')
-          })
-        }
+      } else if (
+        handleMiniOwnedGatewayEvent({
+          eventType: event.type,
+          isActiveEvent,
+          payload,
+          sessionId: sessionId ?? null,
+          updateSessionState,
+          upsertToolCall
+        })
+      ) {
+        // The full desktop handles Mini-owned credential, MCP, terminal,
+        // preview, and pane events in its aliased module. The SSH module
+        // returns false without importing any of those action graphs.
       } else if (event.type === 'approval.request') {
         // Dangerous-command / execute_code approval. The Python side is blocked
         // in _await_gateway_decision() until approval.respond lands; without
@@ -1050,118 +1030,6 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
           sessionId,
           title: translateNow('notifications.native.approvalTitle')
         })
-      } else if (event.type === 'sudo.request') {
-        // Sudo password capture (tools/terminal_tool.py). Blocked on
-        // sudo.respond {request_id, password}.
-        const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
-
-        if (requestId) {
-          setSudoRequest({ requestId, sessionId: sessionId ?? null })
-
-          if (sessionId) {
-            updateSessionState(sessionId, state => ({ ...state, needsInput: true }))
-          }
-
-          dispatchNativeNotification({
-            body: translateNow('notifications.native.inputBody'),
-            kind: 'input',
-            sessionId,
-            title: translateNow('notifications.native.inputTitle')
-          })
-        }
-      } else if (event.type === 'secret.request') {
-        // Skill credential capture (tools/skills_tool.py). Blocked on
-        // secret.respond {request_id, value}.
-        const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
-
-        if (requestId) {
-          const envVar = typeof payload?.env_var === 'string' ? payload.env_var : ''
-          const promptText = typeof payload?.prompt === 'string' ? payload.prompt : ''
-
-          setSecretRequest({
-            requestId,
-            envVar,
-            prompt: promptText,
-            sessionId: sessionId ?? null
-          })
-
-          if (sessionId) {
-            updateSessionState(sessionId, state => ({ ...state, needsInput: true }))
-          }
-
-          dispatchNativeNotification({
-            body: promptText || envVar || translateNow('notifications.native.inputBody'),
-            kind: 'input',
-            sessionId,
-            title: translateNow('notifications.native.inputTitle')
-          })
-        }
-      } else if (event.type === 'terminal.read.request') {
-        // read_terminal tool: serialize the renderer's xterm buffer and answer
-        // immediately (Python blocks on the respond). Empty text = no live pane.
-        const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
-
-        if (requestId) {
-          const start = typeof payload?.start === 'number' ? payload.start : undefined
-          const count = typeof payload?.count === 'number' ? payload.count : undefined
-          const result = readActiveTerminal({ start, count })
-
-          void $gateway.get()?.request('terminal.read.respond', {
-            request_id: requestId,
-            text: result ? JSON.stringify(result) : ''
-          })
-        }
-      } else if (event.type === 'preview.read.request') {
-        // read_preview tool: serialize the active preview tab (a Browser
-        // webview's page text is async) and answer. Empty text = nothing open.
-        const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
-
-        if (requestId) {
-          const start = typeof payload?.start === 'number' ? payload.start : undefined
-          const count = typeof payload?.count === 'number' ? payload.count : undefined
-
-          void readActivePreview({ count, start }).then(result => {
-            void $gateway.get()?.request('preview.read.respond', {
-              request_id: requestId,
-              text: result ? JSON.stringify(result) : ''
-            })
-          })
-        }
-      } else if (event.type === 'window.read.request') {
-        // read_window_below tool: main owns native window enumeration, so ask
-        // it over IPC and answer. Empty text = unavailable (no bridge, or
-        // enumeration unsupported on this system e.g. Wayland).
-        const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
-
-        if (requestId) {
-          const read = window.hermesDesktop?.readWindowBelow
-
-          const answer = (result: unknown) =>
-            $gateway.get()?.request('window.read.respond', {
-              request_id: requestId,
-              text: result ? JSON.stringify(result) : ''
-            })
-
-          // .catch: ipcRenderer.invoke rejects on an older shell without the
-          // handler or a main-side throw — without an empty answer the tool
-          // would stall its full 30s timeout.
-          void Promise.resolve(read ? read() : null).then(answer, () => answer(null))
-        }
-      } else if (event.type === 'agent.terminal.output') {
-        // Live chunk from a background process → its read-only agent terminal tab.
-        writeAgentTerminalChunk(payload?.process_id ?? '', payload?.chunk ?? '')
-      } else if (event.type === 'terminal.close') {
-        // Agent closed its own read-only tab via the desktop-gated close_terminal tool.
-        // The process is untouched — this only drops the view.
-        closeAgentTerminalByProc(payload?.process_id ?? '')
-      } else if (event.type === 'pane.reveal') {
-        // Agent revealed a pane via the desktop-gated focus_pane tool, in
-        // response to an explicit user request. Active session only — a
-        // background turn must never move the user's focus (desktop AGENTS.md:
-        // offer, don't hijack).
-        if (isActiveEvent) {
-          revealDesktopPane(payload?.pane ?? '')
-        }
       } else if (event.type === 'message.reaction') {
         // The agent reacted to a message via the desktop-gated
         // react_to_message tool. Already persisted — this only paints it now

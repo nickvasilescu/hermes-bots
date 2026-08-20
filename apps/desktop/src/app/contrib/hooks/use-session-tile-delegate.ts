@@ -1,3 +1,4 @@
+import { buildSessionTileResumePayload } from '@desktop/session-tile-resume-payload'
 import { useEffect } from 'react'
 
 import { getLatestSessionMessages, PROMPT_SUBMIT_REQUEST_TIMEOUT_MS } from '@/hermes'
@@ -111,12 +112,10 @@ export function useSessionTileDelegate({
 
         const [prefetch, resumed] = await Promise.all([
           getLatestSessionMessages(storedSessionId, profile).catch(() => null),
-          requestGateway<SessionResumeResponse>('session.resume', {
-            session_id: storedSessionId,
-            cols: 96,
-            omit_messages: true,
-            ...(profile ? { profile } : {})
-          })
+          requestGateway<SessionResumeResponse>(
+            'session.resume',
+            buildSessionTileResumePayload({ profile, sessionId: storedSessionId })
+          )
         ])
 
         const runtimeId = resumed?.session_id

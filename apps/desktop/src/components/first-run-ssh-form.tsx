@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 
-import { enrichSelectedSshHost, isNumericTailscaleIp } from '@/app/settings/ssh-host-selection'
+import { isNumericTailscaleIp } from '@/app/settings/ssh-host-selection'
 import { BrandMark } from '@/components/brand-mark'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -162,33 +162,6 @@ export function FirstRunSshForm({ onBack }: FirstRunSshFormProps) {
     setTestedPayloadKey(null)
   }
 
-  const resolveHost = async () => {
-    if (!isNumericTailscaleIp(host) || !window.hermesDesktop?.sshResolveHost) {
-      return
-    }
-
-    const selected = {
-      sshHost: host.trim(),
-      sshUser: user.trim(),
-      sshPort: Number(port) === 22 ? null : Number(port),
-      sshKeyPath: SSH_ONLY_IDENTITY_PATH,
-      sshRemoteHermesPath: remoteHermesPath
-    }
-
-    try {
-      const enriched = enrichSelectedSshHost(
-        selected,
-        selected.sshHost,
-        await window.hermesDesktop.sshResolveHost(selected.sshHost)
-      )
-
-      setUser(enriched.sshUser)
-      setPort(String(enriched.sshPort ?? 22))
-    } catch {
-      // The numeric host remains usable without ~/.ssh/config enrichment.
-    }
-  }
-
   const testConnection = async () => {
     if (validationError) {
       setError(validationError)
@@ -260,7 +233,6 @@ export function FirstRunSshForm({ onBack }: FirstRunSshFormProps) {
               autoComplete="off"
               disabled={disabled}
               id="ssh-only-host"
-              onBlur={() => void resolveHost()}
               onChange={event => {
                 invalidate()
                 setHost(event.target.value)

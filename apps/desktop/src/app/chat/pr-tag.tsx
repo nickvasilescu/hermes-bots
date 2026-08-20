@@ -1,6 +1,7 @@
 import { Codicon } from '@/components/ui/codicon'
 import { Tip } from '@/components/ui/tooltip'
 import type { HermesBranchPullRequest } from '@/global'
+import { openExternalLink } from '@/lib/external-link'
 import { cn } from '@/lib/utils'
 import { pullRequestBucket } from '@/store/pull-requests'
 
@@ -16,7 +17,7 @@ const PR_STYLE: Record<string, { className: string; icon: string }> = {
 
 export function openPullRequest(pr: HermesBranchPullRequest): void {
   if (pr.url) {
-    void window.hermesDesktop?.openExternal?.(pr.url)
+    openExternalLink(pr.url)
   }
 }
 

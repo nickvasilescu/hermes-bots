@@ -57,7 +57,7 @@ function chatWindowWebPreferences(preloadPath: string, { devTools = true }: { de
 // onboarding overlays and the global session sidebar. `watch=1` marks a
 // spectator window (e.g. a running subagent's session): the renderer resumes it
 // lazily so the gateway never builds an agent just to stream into it.
-function buildSessionWindowUrl(sessionId: string, { devServer, rendererIndexPath, watch }: any = {}) {
+function buildSessionWindowUrl(sessionId: string, { devServer, rendererIndexPath, rendererUrl, watch }: any = {}) {
   const query = `?win=secondary${watch ? '&watch=1' : ''}`
   const route = `#/${encodeURIComponent(sessionId)}`
 
@@ -65,6 +65,10 @@ function buildSessionWindowUrl(sessionId: string, { devServer, rendererIndexPath
     const base = devServer.endsWith('/') ? devServer.slice(0, -1) : devServer
 
     return `${base}/${query}${route}`
+  }
+
+  if (rendererUrl) {
+    return `${rendererUrl}${query}${route}`
   }
 
   return `${pathToFileURL(rendererIndexPath).toString()}${query}${route}`

@@ -1,4 +1,4 @@
-import { resolveGatewayWsUrl, type GatewayWsConnection, type ResolveGatewayWsUrlDeps } from '@hermes/shared'
+import { type GatewayWsConnection, resolveGatewayWsUrl, type ResolveGatewayWsUrlDeps } from '@hermes/shared'
 
 export type GatewayProxyPurpose = 'gateway' | 'plugin' | 'voice'
 
@@ -71,7 +71,7 @@ export class NativeGatewaySocket {
     this.#bridge = bridge
     this.id = globalThis.crypto?.randomUUID?.() ?? `gateway-${Date.now()}-${Math.random().toString(16).slice(2)}`
     this.#unsubscribe = bridge.onEvent(event => {
-      if (event.id === this.id) this.#receive(event)
+      if (event.id === this.id) {this.#receive(event)}
     })
 
     queueMicrotask(() => {
@@ -83,18 +83,19 @@ export class NativeGatewaySocket {
   }
 
   addEventListener(type: string, callback: SocketListener | null): void {
-    if (!callback) return
+    if (!callback) {return}
     const listeners = this.#listeners.get(type) ?? new Set<SocketListener>()
     listeners.add(callback)
     this.#listeners.set(type, listeners)
   }
 
   removeEventListener(type: string, callback: SocketListener | null): void {
-    if (callback) this.#listeners.get(type)?.delete(callback)
+    if (callback) {this.#listeners.get(type)?.delete(callback)}
   }
 
   dispatchEvent(event: Event): boolean {
     this.#dispatch(event.type, event)
+
     return !event.defaultPrevented
   }
 
@@ -105,11 +106,13 @@ export class NativeGatewaySocket {
 
     if (data instanceof Blob) {
       void data.arrayBuffer().then(buffer => this.#bridge.send(this.id, buffer))
+
       return
     }
 
     if (ArrayBuffer.isView(data)) {
       this.#bridge.send(this.id, new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+
       return
     }
 
@@ -117,34 +120,37 @@ export class NativeGatewaySocket {
   }
 
   close(_code?: number, _reason?: string): void {
-    if (this.readyState === NativeGatewaySocket.CLOSED || this.readyState === NativeGatewaySocket.CLOSING) return
+    if (this.readyState === NativeGatewaySocket.CLOSED || this.readyState === NativeGatewaySocket.CLOSING) {return}
     this.readyState = NativeGatewaySocket.CLOSING
     this.#bridge.close(this.id)
   }
 
   #receive(event: GatewayProxyEvent): void {
     if (event.type === 'open') {
-      if (this.readyState !== NativeGatewaySocket.CONNECTING) return
+      if (this.readyState !== NativeGatewaySocket.CONNECTING) {return}
       this.readyState = NativeGatewaySocket.OPEN
       this.#dispatch('open', eventFor('open'))
+
       return
     }
 
     if (event.type === 'message' && this.readyState === NativeGatewaySocket.OPEN) {
       this.#dispatch('message', eventFor('message', { data: normalizeMessageData(event.data) }))
+
       return
     }
 
     if (event.type === 'error') {
       this.#dispatch('error', eventFor('error'))
+
       return
     }
 
-    if (event.type === 'close') this.#finishClose(event.code ?? 1000, event.reason ?? '')
+    if (event.type === 'close') {this.#finishClose(event.code ?? 1000, event.reason ?? '')}
   }
 
   #finishClose(code: number, reason: string): void {
-    if (this.readyState === NativeGatewaySocket.CLOSED) return
+    if (this.readyState === NativeGatewaySocket.CLOSED) {return}
     this.readyState = NativeGatewaySocket.CLOSED
     this.#dispatch('close', eventFor('close', { code, reason, wasClean: code === 1000 }))
     this.#unsubscribe?.()
@@ -156,21 +162,24 @@ export class NativeGatewaySocket {
     property?.call(this as unknown as WebSocket, event)
 
     for (const listener of this.#listeners.get(type) ?? []) {
-      if (typeof listener === 'function') listener.call(this as unknown as WebSocket, event)
-      else listener.handleEvent(event)
+      if (typeof listener === 'function') {listener.call(this as unknown as WebSocket, event)}
+      else {listener.handleEvent(event)}
     }
   }
 }
 
 function rewriteGatewayUrl(rawUrl: string, target: GatewayProxyTarget): string {
-  if (target.purpose === 'gateway') return rawUrl
+  if (target.purpose === 'gateway') {return rawUrl}
 
   const url = new URL(rawUrl)
-  if (!url.pathname.endsWith('/api/ws')) throw new Error('Gateway WebSocket URL has an unexpected endpoint.')
+
+  if (!url.pathname.endsWith('/api/ws')) {throw new Error('Gateway WebSocket URL has an unexpected endpoint.')}
   const targetUrl = new URL(target.path ?? '', 'http://gateway.invalid')
   url.pathname = url.pathname.replace(/\/api\/ws$/, targetUrl.pathname)
   targetUrl.searchParams.forEach((value, name) => url.searchParams.set(name, value))
-  if (target.profile) url.searchParams.set('profile', target.profile)
+
+  if (target.profile) {url.searchParams.set('profile', target.profile)}
+
   return url.toString()
 }
 
@@ -180,7 +189,8 @@ export async function resolveGatewayClientTarget(
   target: GatewayProxyTarget
 ): Promise<string | WebSocket> {
   if (connection.useGatewayProxy) {
-    if (!deps.gatewayProxy) throw new Error('Native gateway proxy is required but unavailable.')
+    if (!deps.gatewayProxy) {throw new Error('Native gateway proxy is required but unavailable.')}
+
     return new NativeGatewaySocket(deps.gatewayProxy, target) as unknown as WebSocket
   }
 
@@ -193,5 +203,6 @@ export async function openAuxiliaryGatewaySocket(
   target: GatewayProxyTarget
 ): Promise<WebSocket> {
   const resolved = await resolveGatewayClientTarget(deps, connection, target)
+
   return typeof resolved === 'string' ? new WebSocket(resolved) : resolved
 }

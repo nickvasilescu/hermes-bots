@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 export interface RendererOriginPolicy {
   devServerUrl?: string
   isPackaged: boolean
+  packagedRendererUrl?: string
   rendererEntryPath: string
 }
 
@@ -35,6 +36,21 @@ export function isTrustedRendererUrl(rawUrl: unknown, policy: RendererOriginPoli
   }
 
   if (policy.isPackaged) {
+    if (policy.packagedRendererUrl) {
+      try {
+        const trusted = new URL(policy.packagedRendererUrl)
+
+        return (
+          candidate.protocol === trusted.protocol &&
+          candidate.hostname === trusted.hostname &&
+          candidate.port === trusted.port &&
+          candidate.pathname === trusted.pathname
+        )
+      } catch {
+        return false
+      }
+    }
+
     if (candidate.protocol !== 'file:' || (candidate.hostname && candidate.hostname !== 'localhost')) {
       return false
     }

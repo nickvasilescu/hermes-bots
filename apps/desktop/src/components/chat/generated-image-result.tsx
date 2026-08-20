@@ -6,8 +6,9 @@ import { DiffusionCanvas } from '@/components/chat/image-generation-placeholder'
 import { ImageActionButton, ImageLightbox } from '@/components/chat/zoomable-image'
 import { useImageDownload } from '@/hooks/use-image-download'
 import { useI18n } from '@/i18n'
+import { openExternalLink } from '@/lib/external-link'
 import { generatedImageFromResult } from '@/lib/generated-images'
-import { filePathFromMediaPath, gatewayMediaDataUrl, isRemoteGateway, mediaExternalUrl, mediaName } from '@/lib/media'
+import { filePathFromMediaPath, gatewayMediaDataUrl, mediaExternalUrl, mediaName } from '@/lib/media'
 import { cn } from '@/lib/utils'
 
 // Aspect hint from the tool args sizes the frame *before* the image loads, so
@@ -37,15 +38,11 @@ async function resolveImageSrc(path: string): Promise<string> {
     return path
   }
 
-  if (window.hermesDesktop && isRemoteGateway()) {
-    return gatewayMediaDataUrl(path)
-  }
-
-  if (!window.hermesDesktop?.readFileDataUrl) {
+  if (!window.hermesDesktop) {
     return mediaExternalUrl(path)
   }
 
-  return window.hermesDesktop.readFileDataUrl(filePathFromMediaPath(path))
+  return gatewayMediaDataUrl(filePathFromMediaPath(path))
 }
 
 export const GeneratedImage: FC<{ aspectRatio?: string; result?: unknown }> = ({ aspectRatio, result }) => {
@@ -100,7 +97,7 @@ export const GeneratedImage: FC<{ aspectRatio?: string; result?: unknown }> = ({
         href="#"
         onClick={event => {
           event.preventDefault()
-          void window.hermesDesktop?.openExternal(mediaExternalUrl(image))
+          openExternalLink(mediaExternalUrl(image))
         }}
       >
         {copy.openImage}: {mediaName(image)}

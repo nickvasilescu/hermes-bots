@@ -23,6 +23,15 @@ test('does not allow an http origin in a packaged app', () => {
   assert.equal(isTrustedRendererUrl('https://example.com/index.html', packaged), false)
 })
 
+test('accepts only the configured packaged application origin and entry path', () => {
+  const custom = { ...packaged, packagedRendererUrl: 'korgo-app://bundle/index.html' }
+
+  assert.equal(isTrustedRendererUrl('korgo-app://bundle/index.html?win=secondary#/chat', custom), true)
+  assert.equal(isTrustedRendererUrl('korgo-app://bundle/other.html', custom), false)
+  assert.equal(isTrustedRendererUrl('korgo-app://evil/index.html', custom), false)
+  assert.equal(isTrustedRendererUrl(pathToFileURL(entry).toString(), custom), false)
+})
+
 test('accepts the exact development origin only outside packaged mode', () => {
   const dev = { devServerUrl: 'http://127.0.0.1:5174/', isPackaged: false, rendererEntryPath: entry }
 

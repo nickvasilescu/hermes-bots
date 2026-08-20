@@ -1,3 +1,5 @@
+import { DEFAULT_RUNTIME_NOT_READY_REASON } from '@desktop/runtime-readiness-copy'
+
 export interface SetupStatusSnapshot {
   provider_configured?: boolean
 }
@@ -28,8 +30,6 @@ export interface RuntimeReadinessResult {
 }
 
 export type RuntimeReadinessRequester = <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>
-
-const DEFAULT_NOT_READY_REASON = 'Add a provider credential before sending your first message.'
 
 function toErrorMessage(error: unknown): null | string {
   if (error instanceof Error) {
@@ -88,7 +88,7 @@ export function interpretRuntimeReadiness(
   signals: RuntimeReadinessSignals,
   options: RuntimeReadinessOptions = {}
 ): RuntimeReadinessResult {
-  const defaultReason = options.defaultReason ?? DEFAULT_NOT_READY_REASON
+  const defaultReason = options.defaultReason ?? DEFAULT_RUNTIME_NOT_READY_REASON
   const unknownReady = options.unknownReady ?? false
 
   const setupConfigured =
