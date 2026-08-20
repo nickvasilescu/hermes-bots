@@ -17,6 +17,7 @@
     "jsx": "react-jsx",
     "paths": {
       "@/*": ["./src/*"],
+      "@desktop/link-title-client": ["./src/lib/link-title-client.full.ts"],
       "@bot-mode/plugin": ["./src/plugins/hermes-bots/legacy-plugin.js"],
       "@hermes/plugin-sdk": ["./src/sdk/index.ts"],
       "@hermes/shared/billing": ["../shared/src/billing-types.ts"],

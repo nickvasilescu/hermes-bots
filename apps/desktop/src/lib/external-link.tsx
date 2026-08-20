@@ -1,14 +1,16 @@
 import type { ComponentProps, ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 
 import { ArrowUpRight } from '@/lib/icons'
 
 import { resolveBrandIcon } from './brand-icon'
+import {
+  fetchLinkTitle,
+  isTitleFetchable,
+  resetLinkTitleCache,
+  useLinkTitle
+} from '@desktop/link-title-client'
 import { cn } from './utils'
-
-const titleCache = new Map<string, string>()
-const titleInflight = new Map<string, Promise<string>>()
-const titleSubs = new Map<string, Set<(value: string) => void>>()
 
 const URL_RE =
   /(?:https?:\/\/|www\.)[^\s<>"'`]+[^\s<>"'`.,;:!?)]|[a-z0-9](?:[a-z0-9-]*\.)+[a-z]{2,}(?:\/[^\s<>"'`.,;:!?)]*)?/gi
@@ -20,11 +22,6 @@ const URL_RE =
 const EXPLICIT_URL_RE = /(?:https?:\/\/|www\.)[^\s<>"'`]+[^\s<>"'`.,;:!?)]/gi
 
 const DOMAIN_RE = /^(?:www\.)?[a-z0-9](?:[a-z0-9-]*\.)+[a-z]{2,}(?::\d+)?(?:[/?#][^\s]*)?$/i
-const SKIP_PROTO_RE = /^(?:file|data|mailto|javascript|blob|chrome|about|hermes):/i
-const LOCAL_HOST_RE = /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?$/i
-
-const ERROR_TITLE_RE =
-  /\b(?:access denied|attention required|captcha|error|forbidden|just a moment|not found|request blocked|too many requests)\b/i
 
 export function normalizeExternalUrl(value: string): string {
   const trimmed = value.trim()
@@ -42,19 +39,6 @@ function parseUrl(value: string): null | URL {
   } catch {
     return null
   }
-}
-
-function titleCacheKey(value: string): string {
-  const url = parseUrl(value)
-
-  if (!url) {
-    return normalizeExternalUrl(value)
-  }
-
-  const host = url.hostname.replace(/^www\./i, '').toLowerCase()
-  const pathname = url.pathname === '/' ? '/' : url.pathname.replace(/\/+$/, '') || '/'
-
-  return `${host}${pathname}${url.search || ''}`
 }
 
 export function shortHostLabel(value: string): string {
@@ -112,88 +96,7 @@ export function urlSlugTitleLabel(value: string): string {
   return hostPathLabel(value)
 }
 
-export function isTitleFetchable(value: string): boolean {
-  if (!value || SKIP_PROTO_RE.test(value)) {
-    return false
-  }
-
-  const url = parseUrl(value)
-
-  return Boolean(url && /^https?:$/.test(url.protocol) && !LOCAL_HOST_RE.test(url.host))
-}
-
-export function fetchLinkTitle(url: string): Promise<string> {
-  const normalizedUrl = normalizeExternalUrl(url)
-  const key = titleCacheKey(normalizedUrl)
-
-  if (!isTitleFetchable(normalizedUrl)) {
-    return Promise.resolve('')
-  }
-
-  if (titleCache.has(key)) {
-    return Promise.resolve(titleCache.get(key) ?? '')
-  }
-
-  const pending = titleInflight.get(key)
-
-  if (pending) {
-    return pending
-  }
-
-  const bridge = typeof window === 'undefined' ? undefined : window.hermesDesktop?.fetchLinkTitle
-
-  if (!bridge) {
-    titleCache.set(key, '')
-
-    return Promise.resolve('')
-  }
-
-  const promise = bridge(normalizedUrl)
-    .then(value => (value || '').replace(/\s+/g, ' ').trim())
-    .then(clean => (clean && !ERROR_TITLE_RE.test(clean) ? clean : ''))
-    .catch(() => '')
-    .then(safe => {
-      titleCache.set(key, safe)
-      titleInflight.delete(key)
-      titleSubs.get(key)?.forEach(sub => sub(safe))
-
-      return safe
-    })
-
-  titleInflight.set(key, promise)
-
-  return promise
-}
-
-export function useLinkTitle(url?: null | string): string {
-  const normalizedUrl = useMemo(() => (url ? normalizeExternalUrl(url) : ''), [url])
-  const key = useMemo(() => (normalizedUrl ? titleCacheKey(normalizedUrl) : ''), [normalizedUrl])
-  const [title, setTitle] = useState(() => (key ? (titleCache.get(key) ?? '') : ''))
-
-  useEffect(() => {
-    setTitle(key ? (titleCache.get(key) ?? '') : '')
-
-    if (!key || !isTitleFetchable(normalizedUrl)) {
-      return
-    }
-
-    const subs = titleSubs.get(key) ?? new Set<(value: string) => void>()
-
-    subs.add(setTitle)
-    titleSubs.set(key, subs)
-    void fetchLinkTitle(normalizedUrl)
-
-    return () => {
-      subs.delete(setTitle)
-
-      if (!subs.size) {
-        titleSubs.delete(key)
-      }
-    }
-  }, [key, normalizedUrl])
-
-  return title
-}
+export { fetchLinkTitle, isTitleFetchable, useLinkTitle }
 
 export function openExternalLink(href: string): void {
   if (href) {
@@ -325,7 +228,5 @@ export function LinkifiedText({ className, explicitOnly = false, pretty = true, 
 }
 
 export function __resetLinkTitleCache(): void {
-  titleCache.clear()
-  titleInflight.clear()
-  titleSubs.clear()
+  resetLinkTitleCache()
 }
