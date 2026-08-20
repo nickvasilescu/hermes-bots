@@ -8,20 +8,30 @@
  * context; registered panes render `<WiredPane part="…"/>` to consume them.
  */
 
-import { useStore } from '@nanostores/react'
-import { useQueryClient } from '@tanstack/react-query'
-import { type CSSProperties, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router'
-
+import { BootFailureOverlay } from '@desktop/boot-failure-overlay'
 import {
   BOT_PROVIDER_SETUP_READY_EVENT,
   BotSetupOverlay,
   isBotProviderSetupReady,
   markBotProviderSetupComplete
-} from '@/app/bot-product/setup-overlay'
+} from '@desktop/bot-setup-overlay'
+import { DesktopInstallOverlay } from '@desktop/install-overlay'
+import { useStore } from '@nanostores/react'
+import { useQueryClient } from '@tanstack/react-query'
+import {
+  type CSSProperties,
+  lazy,
+  type ReactNode,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
+import { useLocation, useNavigate } from 'react-router'
+
 import { formatRefValue } from '@/components/assistant-ui/directive-text'
-import { BootFailureOverlay } from '@/components/boot-failure-overlay'
-import { DesktopInstallOverlay } from '@/components/desktop-install-overlay'
 import { FindBar } from '@/components/find-bar'
 import { GatewayConnectingOverlay } from '@/components/gateway-connecting-overlay'
 import { NotificationStack } from '@/components/notifications'
@@ -147,16 +157,14 @@ const CommandCenterView = lazy(async () => ({ default: (await import('../command
 const CronView = lazy(async () => ({ default: (await import('../cron')).CronView }))
 const WebhooksView = lazy(async () => ({ default: (await import('../webhooks')).WebhooksView }))
 const ProfilesView = lazy(async () => ({ default: (await import('../profiles')).ProfilesView }))
-const SettingsView = lazy(async () => ({ default: (await import('../settings')).SettingsView }))
+const SettingsView = lazy(async () => ({ default: (await import('@desktop/settings')).SettingsView }))
 const StarmapView = lazy(async () => ({ default: (await import('../starmap')).StarmapView }))
 
 const LOCAL_CREDENTIAL_ENTRY_ALLOWED = allowsDesktopCapability('allowLocalCredentialEntry')
 const LOCAL_RUNTIME_ALLOWED = allowsDesktopCapability('allowLocalRuntime')
 
 const BOT_INTEGRATION_SETUP_ALLOWED =
-  LOCAL_CREDENTIAL_ENTRY_ALLOWED ||
-  allowsDesktopCapability('allowOrgo') ||
-  allowsDesktopCapability('allowComposio')
+  LOCAL_CREDENTIAL_ENTRY_ALLOWED || allowsDesktopCapability('allowOrgo') || allowsDesktopCapability('allowComposio')
 
 // Surfaces (the four wired panes), the render context + WiredPane, and the
 // WiringActions/WiringApi contracts all live in sibling modules — this file is

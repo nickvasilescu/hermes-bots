@@ -1,4 +1,5 @@
-import { TRANSLATIONS } from './catalog'
+import { TRANSLATIONS } from '@desktop/i18n-catalog'
+
 import { DEFAULT_LOCALE } from './languages'
 import type { Locale } from './types'
 

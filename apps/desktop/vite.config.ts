@@ -1,8 +1,10 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
-import path from 'path'
 import fs from 'fs'
+import path from 'path'
+
+import tailwindcss from '@tailwindcss/vite'
+import react from '@vitejs/plugin-react'
+import ts from 'typescript'
+import { defineConfig } from 'vite'
 
 // `hgui` symlinks a worktree's node_modules to the main checkout. Vite realpaths
 // those before enforcing server.fs.allow, so codicon/font assets resolve outside
@@ -43,10 +45,14 @@ const debugEntry = (command: string, env: Record<string, string>) =>
     : path.resolve(import.meta.dirname, './src/debug/dev-only.noop.ts')
 
 const desktopSku = (): 'hermes' | 'bot' | 'bot-ssh-only' => {
-  if (process.env.VITE_HERMES_DESKTOP_SKU === 'bot-ssh-only') return 'bot-ssh-only'
+  if (process.env.VITE_HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    return 'bot-ssh-only'
+  }
+
   if (process.env.VITE_HERMES_DESKTOP_SKU === 'bot' || process.env.VITE_HERMES_DESKTOP_PRODUCT === 'bot') {
     return 'bot'
   }
+
   return 'hermes'
 }
 
@@ -67,9 +73,16 @@ const emojibaseAssets = () => ({
   }) {
     server.middlewares.use('/emojibase', (req, res, next) => {
       const rel = (req.url ?? '').split('?')[0].replace(/^\/+/, '')
-      if (!emojibaseDir || !EMOJIBASE_PATH.test(rel)) return next()
+
+      if (!emojibaseDir || !EMOJIBASE_PATH.test(rel)) {
+        return next()
+      }
+
       fs.readFile(path.join(emojibaseDir, rel), (err: unknown, buf: Buffer) => {
-        if (err) return next()
+        if (err) {
+          return next()
+        }
+
         res.setHeader('Content-Type', 'application/json')
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
         res.end(buf)
@@ -77,7 +90,10 @@ const emojibaseAssets = () => ({
     })
   },
   generateBundle(this: { emitFile: (asset: { type: 'asset'; fileName: string; source: Uint8Array }) => void }) {
-    if (!emojibaseDir) return
+    if (!emojibaseDir) {
+      return
+    }
+
     for (const rel of ['en/data.json', 'en/messages.json', 'en/shortcodes/emojibase.json']) {
       this.emitFile({
         type: 'asset',
@@ -88,15 +104,86 @@ const emojibaseAssets = () => ({
   }
 })
 
+const SSH_I18N_VIRTUAL_ID = '\0hermes:ssh-only-english.ts'
+const SSH_I18N_IMPORT_ID = '@desktop/i18n-ssh-english'
+
+const SENSITIVE_I18N_COPY =
+  /(?:api[ -]?key|cloud account|cloud computer|composio|credential|gateway token|hermes cloud|local gateway|oauth|orgo|provider account|provider key|remote gateway|remote url|session token|store .*plain text)/i
+
+function sanitizeSshOnlyEnglish(source: string): string {
+  const file = ts.createSourceFile('en.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  const replacements: Array<{ end: number; start: number }> = []
+
+  const shouldScrub = (text: string) => {
+    if (SENSITIVE_I18N_COPY.test(text)) {
+      return true
+    }
+
+    if (!/tailscale/i.test(text)) {
+      return false
+    }
+
+    // Strict SSH setup and error copy is intentionally retained. General
+    // installation/provisioning copy is not part of this SKU.
+    return !/(?:mini|numeric tailscale|reachable over tailscale|tailscale connectivity)/i.test(text)
+  }
+
+  const visit = (node: ts.Node) => {
+    if (ts.isStringLiteralLike(node) && shouldScrub(node.text)) {
+      replacements.push({ start: node.getStart(file), end: node.getEnd() })
+
+      return
+    }
+
+    if (ts.isTemplateExpression(node) && shouldScrub(node.getText(file))) {
+      replacements.push({ start: node.getStart(file), end: node.getEnd() })
+
+      return
+    }
+
+    ts.forEachChild(node, visit)
+  }
+
+  visit(file)
+
+  return replacements
+    .sort((a, b) => b.start - a.start)
+    .reduce(
+      (result, replacement) =>
+        `${result.slice(0, replacement.start)}"Unavailable in SSH client."${result.slice(replacement.end)}`,
+      source
+    )
+}
+
+const sshOnlyI18nEnglish = (enabled: boolean) => ({
+  name: 'hermes:ssh-only-i18n',
+  resolveId(id: string) {
+    return enabled && id === SSH_I18N_IMPORT_ID ? SSH_I18N_VIRTUAL_ID : null
+  },
+  load(id: string) {
+    if (!enabled || id !== SSH_I18N_VIRTUAL_ID) {
+      return null
+    }
+
+    return sanitizeSshOnlyEnglish(fs.readFileSync(path.resolve(import.meta.dirname, './src/i18n/en.ts'), 'utf8'))
+  }
+})
+
 export default defineConfig(({ command }) => {
   const sku = desktopSku()
+  const sshOnly = sku === 'bot-ssh-only'
+
+  const rendererSkuModule = (full: string, disabled: string) =>
+    path.resolve(import.meta.dirname, sshOnly ? disabled : full)
+
   const linkTitleClient = path.resolve(
     import.meta.dirname,
-    sku === 'bot-ssh-only' ? './src/lib/link-title-client.disabled.ts' : './src/lib/link-title-client.full.ts'
+    sshOnly ? './src/lib/link-title-client.disabled.ts' : './src/lib/link-title-client.full.ts'
   )
+
   return {
     base: './',
-    plugins: [react(), tailwindcss(), emojibaseAssets()],
+    plugins: [sshOnlyI18nEnglish(sshOnly), react(), tailwindcss(), emojibaseAssets()],
     define: {
       'import.meta.env.VITE_HERMES_DESKTOP_SKU': JSON.stringify(sku),
       'import.meta.env.VITE_HERMES_DESKTOP_PRODUCT': JSON.stringify(sku === 'hermes' ? 'hermes' : 'bot')
@@ -166,7 +253,33 @@ export default defineConfig(({ command }) => {
     },
     resolve: {
       alias: {
+        '@desktop/bot-setup-overlay': rendererSkuModule(
+          './src/app/bot-product/setup-overlay.tsx',
+          './src/app/bot-product/setup-overlay.disabled.tsx'
+        ),
+        '@desktop/boot-failure-overlay': rendererSkuModule(
+          './src/components/boot-failure-overlay.tsx',
+          './src/components/boot-failure-overlay.disabled.tsx'
+        ),
+        '@desktop/install-overlay': rendererSkuModule(
+          './src/components/desktop-install-overlay.tsx',
+          './src/components/desktop-install-overlay.disabled.tsx'
+        ),
+        '@desktop/i18n-catalog': rendererSkuModule('./src/i18n/catalog.ts', './src/i18n/catalog.disabled.ts'),
+        '@desktop/integration-store': rendererSkuModule(
+          './src/app/right-sidebar/store.full.ts',
+          './src/app/right-sidebar/store.disabled.ts'
+        ),
+        '@desktop/integration-surfaces': rendererSkuModule(
+          './src/app/contrib/integration-surfaces.full.tsx',
+          './src/app/contrib/integration-surfaces.disabled.tsx'
+        ),
         '@desktop/link-title-client': linkTitleClient,
+        '@desktop/sdk-integration-host': rendererSkuModule(
+          './src/sdk/integration-host.full.ts',
+          './src/sdk/integration-host.disabled.ts'
+        ),
+        '@desktop/settings': rendererSkuModule('./src/app/settings/index.tsx', './src/app/settings/index.disabled.tsx'),
         '@/debug/dev-only': debugEntry(command, process.env as Record<string, string>),
         '@': path.resolve(import.meta.dirname, './src'),
         '@bot-mode/plugin': botModePlugin,

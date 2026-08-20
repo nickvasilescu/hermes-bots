@@ -6,16 +6,16 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
-import { BANNED_ARTIFACT_MARKERS, BANNED_RESOURCE_NAMES } from './verify-ssh-only-bundle.mjs'
+import { BANNED_ARTIFACT_MARKERS, BANNED_RENDERER_MARKERS, BANNED_RESOURCE_NAMES } from './verify-ssh-only-bundle.mjs'
 
 const verifier = fileURLToPath(new URL('./verify-ssh-only-bundle.mjs', import.meta.url))
 
 function fixture(contents = 'Korgo Bot bot-ssh-only clean packaged application') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'korgo-ssh-only-fixture-'))
   const resources = path.join(root, 'resources')
-  fs.mkdirSync(path.join(resources, 'app.asar.unpacked', 'dist'), { recursive: true })
+  fs.mkdirSync(path.join(resources, 'app.asar.unpacked', 'dist', 'assets'), { recursive: true })
   fs.writeFileSync(path.join(resources, 'app.asar'), contents)
-  fs.writeFileSync(path.join(resources, 'app.asar.unpacked', 'dist', 'renderer.js'), 'clean')
+  fs.writeFileSync(path.join(resources, 'app.asar.unpacked', 'dist', 'assets', 'renderer.js'), 'clean')
   return root
 }
 
@@ -49,6 +49,31 @@ test('executed verifier rejects banned resource names', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
+  }
+})
+
+test('executed verifier rejects every banned SSH renderer marker', () => {
+  for (const marker of BANNED_RENDERER_MARKERS) {
+    const root = fixture()
+    try {
+      fs.writeFileSync(path.join(root, 'resources', 'app.asar.unpacked', 'dist', 'assets', 'renderer.js'), marker)
+      const result = runVerifier(root)
+      assert.notEqual(result.status, 0, marker)
+      assert.match(result.stderr, /banned SSH renderer marker/, marker)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('renderer-only markers do not reject a main-process migration identifier', () => {
+  const root = fixture()
+  try {
+    fs.writeFileSync(path.join(root, 'resources', 'app.asar.unpacked', 'dist', 'electron-main.mjs'), 'remoteToken')
+    const result = runVerifier(root)
+    assert.equal(result.status, 0, result.stderr)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
   }
 })
 

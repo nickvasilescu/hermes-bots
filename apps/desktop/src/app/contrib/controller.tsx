@@ -1,5 +1,6 @@
 import '@/app/bot-product/shell.css'
 
+import { ConnectorsModal, OrgoDesktopPane, ResizableComputerRail } from '@desktop/integration-surfaces'
 import { useStore } from '@nanostores/react'
 import { atom, computed } from 'nanostores'
 import type { CSSProperties, ReactElement, PointerEvent as ReactPointerEvent } from 'react'
@@ -8,7 +9,6 @@ import { CHAT_HEADER_AREA } from '@/app/chat/contrib'
 import { SessionDraftTitle } from '@/app/chat/session-draft-title'
 import { SessionStatusDot } from '@/app/chat/session-status-dot'
 import { PALETTE_AREA, type PaletteContribution, paletteToggle } from '@/app/command-palette/contrib'
-import { ConnectorsModal } from '@/app/connectors/modal'
 import { type StatusbarItem } from '@/app/shell/statusbar-controls'
 import { IdleMount } from '@/components/idle-mount'
 import { $layoutEditMode, toggleLayoutEditMode } from '@/components/pane-shell/edit-mode'
@@ -78,8 +78,6 @@ import {
   WorkspaceTabMenu
 } from '../chat/session-tile'
 import { HudShell } from '../hud/hud-shell'
-import { OrgoDesktopPane } from '../right-sidebar/desktop'
-import { ResizableComputerRail } from '../right-sidebar/desktop/rail'
 import { $orgoDesktopOpen, $terminalTakeover, setOrgoDesktopOpen, setTerminalTakeover } from '../right-sidebar/store'
 import { $workspaceIsPage } from '../routes'
 import { ShellContextMenu } from '../shell/shell-context-menu'
@@ -365,10 +363,7 @@ const DEFAULT_TREE = split(
 // fixed computer/routines rail mounted by ContribController at right.
 const BOT_TREE = split(
   'row',
-  [
-    group(['hermes-bots:pane-v2'], { id: 'grp-bots' }),
-    group(['workspace'], { id: 'grp-main' })
-  ],
+  [group(['hermes-bots:pane-v2'], { id: 'grp-bots' }), group(['workspace'], { id: 'grp-main' })],
   [1, 3.4],
   'spl-root'
 )
@@ -745,7 +740,11 @@ export function ContribController() {
 
   return (
     <SidebarProvider
-      className={isBotProduct() ? 'h-screen min-h-0 flex-col bg-background bot-product-shell' : 'h-screen min-h-0 flex-col bg-background'}
+      className={
+        isBotProduct()
+          ? 'h-screen min-h-0 flex-col bg-background bot-product-shell'
+          : 'h-screen min-h-0 flex-col bg-background'
+      }
       onOpenChange={setSidebarOpen}
       open={sidebarOpen}
       style={{ '--sidebar-width': '100%' } as CSSProperties}

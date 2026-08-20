@@ -35,6 +35,25 @@ export const BANNED_ARTIFACT_MARKERS = Object.freeze([
   'HERMES_DESKTOP_CDP_PORT'
 ])
 
+// These are renderer-only because generic connection persistence in main may
+// still understand legacy records during migration. They must never be
+// present in the compiled SSH renderer, where they would prove that a
+// credential/provisioning module or its UI copy remains reachable.
+export const BANNED_RENDERER_MARKERS = Object.freeze([
+  'oauthLoginConnectionConfig',
+  'remoteToken',
+  'orgoDesktop',
+  'tailscaleLocalStatus',
+  'beginTailscale',
+  'connectRemoteHermes',
+  'Composio API key',
+  'Store the gateway token in plain text?',
+  'Orgo API key',
+  'Paste session token',
+  'Create cloud computer',
+  'Use this Mac'
+])
+
 // Every forbidden content marker is also forbidden in a resource path. This
 // catches an empty banned file/directory as well as marker text in a bundle.
 export const BANNED_RESOURCE_NAMES = BANNED_ARTIFACT_MARKERS
@@ -108,6 +127,17 @@ function scanResourceDirectory(resourcesDir) {
     }
     for (const marker of REQUIRED_IDENTITY_MARKERS) {
       if (contents.includes(Buffer.from(marker))) identityFound.add(marker)
+    }
+
+    const normalizedRelative = relative.split(path.sep).join('/')
+    const rendererAsset = /(?:^|\/)dist\/assets\/[^/]+\.js$/i.test(normalizedRelative)
+
+    if (rendererAsset) {
+      for (const marker of BANNED_RENDERER_MARKERS) {
+        if (contents.includes(Buffer.from(marker))) {
+          findings.push(`${relative}: banned SSH renderer marker ${JSON.stringify(marker)}`)
+        }
+      }
     }
   })
 

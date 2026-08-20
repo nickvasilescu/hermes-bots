@@ -1,4 +1,3 @@
-export { TRANSLATIONS } from './catalog'
 export {
   getConfigDisplayLanguage,
   type I18nConfigClient,
@@ -29,3 +28,4 @@ export {
 } from './plugin-i18n'
 export { setRuntimeI18nLocale, translateNow } from './runtime'
 export type { Locale, ToolTitleKey, Translations } from './types'
+export { TRANSLATIONS } from '@desktop/i18n-catalog'

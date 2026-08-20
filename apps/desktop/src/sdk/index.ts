@@ -18,9 +18,9 @@
  *  - `ui.*` — the design language, so plugin UI looks native by default.
  */
 
+import { integrationHost } from '@desktop/sdk-integration-host'
 import { atom, type ReadableAtom } from 'nanostores'
 
-import { openConnectors } from '@/app/connectors/store'
 import { openSession, type OpenSessionIntent } from '@/app/open-session'
 import { $narrowViewport } from '@/components/pane-shell/tree/store'
 import { onGatewayEvent } from '@/contrib/events'
@@ -192,33 +192,7 @@ export const host = {
 
     return gateway.request<T>(method, params)
   },
-
-  /** Composio Connectors marketplace — the dedicated authenticated-services
-   *  surface. Plugins open it; they never see the saved API key. */
-  connectors: {
-    open: () => openConnectors(),
-    syncProfiles: async (profiles: string[]) => {
-      const api = window.hermesDesktop?.connectors
-
-      if (!api?.syncProfiles) {
-        return { synced: 0, removed: 0, toolkits: [] as string[] }
-      }
-
-      return api.syncProfiles(profiles)
-    }
-  },
-
-  orgo: {
-    syncProfiles: async (profiles: string[]) => {
-      const api = window.hermesDesktop?.orgoDesktop
-
-      if (!api?.syncProfiles) {
-        return { synced: 0, computerId: '' }
-      }
-
-      return api.syncProfiles(profiles)
-    }
-  }
+  ...integrationHost
 }
 
 // -- react bridge -------------------------------------------------------------
