@@ -13,6 +13,11 @@ interface WebContentsLike {
   mainFrame?: unknown
 }
 
+interface RegisteredWebContents {
+  capability: WindowCapability
+  token: symbol
+}
+
 export interface IpcEventLike {
   sender?: WebContentsLike
   senderFrame?: FrameLike | null
@@ -24,12 +29,17 @@ export interface IpcSenderIdentity {
 }
 
 export class IpcTrustRegistry {
-  readonly #contents = new Map<WebContentsLike, WindowCapability>()
+  readonly #contents = new Map<WebContentsLike, RegisteredWebContents>()
 
   register(contents: WebContentsLike, capability: WindowCapability): () => void {
-    this.#contents.set(contents, capability)
+    const registration = { capability, token: Symbol(capability) }
+    this.#contents.set(contents, registration)
 
-    return () => this.#contents.delete(contents)
+    return () => {
+      if (this.#contents.get(contents)?.token === registration.token) {
+        this.#contents.delete(contents)
+      }
+    }
   }
 
   unregister(contents: WebContentsLike): void {
@@ -44,13 +54,13 @@ export class IpcTrustRegistry {
       return null
     }
 
-    const capability = this.#contents.get(sender)
+    const registration = this.#contents.get(sender)
 
-    if (!capability || frame.top !== frame || frame !== sender.mainFrame || !isTrustedRendererUrl(frame.url ?? '')) {
+    if (!registration || frame.top !== frame || frame !== sender.mainFrame || !isTrustedRendererUrl(frame.url ?? '')) {
       return null
     }
 
-    return { capability, senderId: typeof sender.id === 'number' ? sender.id : null }
+    return { capability: registration.capability, senderId: typeof sender.id === 'number' ? sender.id : null }
   }
 }
 
