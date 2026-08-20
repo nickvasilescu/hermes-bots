@@ -121,18 +121,6 @@ let
         npm exec -- vite build
         node scripts/bundle-electron-main.mjs
 
-        mkdir -p "$TMPDIR/electron-headers"
-        tar -xzf ${electronHeaders} -C "$TMPDIR/electron-headers" --strip-components=1
-        ${lib.getExe hermesNpmLib.node-gyp} rebuild \
-          --directory=../../node_modules/node-pty \
-          --build-from-source \
-          --runtime=electron \
-          --target=${electronVersion} \
-          --nodedir="$TMPDIR/electron-headers" \
-          --disturl="" \
-          --offline
-        node scripts/stage-native-deps.mjs linux x64
-
         npm run postbuild
 
         unzip -q ${electronArchive} -d "$TMPDIR/electron-dist"
@@ -158,9 +146,11 @@ let
       test -x "$app/Korgo Bot"
       test "$(cat "$app/version")" = "${electronVersion}"
       test -f "$app/resources/app.asar"
-      test -f "$app/resources/app.asar.unpacked/dist/node_modules/node-pty/build/Release/pty.node"
+      test ! -e "$app/resources/app.asar.unpacked/dist/node_modules/node-pty"
+      test ! -e "$app/resources/app.asar.unpacked/dist/node_modules/get-windows"
       test ! -e "$app/resources/orgo"
-      test -f apps/desktop/dist/node_modules/node-pty/build/Release/pty.node
+      test ! -e apps/desktop/dist/node_modules/node-pty
+      test ! -e apps/desktop/dist/node_modules/get-windows
       node apps/desktop/scripts/verify-ssh-only-bundle.mjs "$app"
       runHook postCheck
     '';
