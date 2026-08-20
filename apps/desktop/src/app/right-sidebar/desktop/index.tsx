@@ -1,23 +1,26 @@
 import { useStore } from '@nanostores/react'
 import type RFB from '@novnc/novnc'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Loader } from '@/components/ui/loader'
 import { Switch } from '@/components/ui/switch'
-import type { DesktopOrgoConfig, DesktopOrgoSessionResult } from '@/global'
+import type { DesktopOrgoComputer, DesktopOrgoConfig, DesktopOrgoSessionResult, DesktopOrgoWorkspace } from '@/global'
 import { useI18n } from '@/i18n'
 import { ChevronLeft, Clipboard, Maximize, RefreshCw, X } from '@/lib/icons'
-import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
+import {
+  $activeGatewayProfile,
+  $profiles,
+  ensureGatewayProfile,
+  normalizeProfileKey,
+  refreshProfiles
+} from '@/store/profile'
 import type { CronJob } from '@/types/hermes'
 
-import {
-  $orgoDesktopOpen,
-  $orgoDesktopSettingsRequest,
-  clearOrgoDesktopSettingsRequest
-} from '../store'
+import { SearchableSelect } from '../../settings/searchable-select'
+import { $orgoDesktopOpen, $orgoDesktopSettingsRequest, clearOrgoDesktopSettingsRequest } from '../store'
 
 import { AgentRoutines, RoutineEditor } from './routines'
 
@@ -60,6 +63,148 @@ function RailHeader({ onBack, title }: RailHeaderProps) {
   )
 }
 
+interface OrgoComputerPickerProps {
+  computers: DesktopOrgoComputer[]
+  emptyMessage: string
+  formatMatches: (count: number) => string
+  listLabel: string
+  onSelect: (computer: DesktopOrgoComputer) => void
+  scopeHint: string
+  searchPlaceholder: string
+  selectedComputerId: string
+  summary: string
+  workspaces: DesktopOrgoWorkspace[]
+}
+
+function computerStatusLabel(status: string): string {
+  const normalized = status.trim().toLowerCase()
+
+  return normalized ? normalized.replace(/(^|[-_\s])\w/g, match => match.toUpperCase()) : 'Unknown'
+}
+
+function computerStatusTone(status: string): string {
+  switch (status.trim().toLowerCase()) {
+    case 'running':
+      return 'bg-emerald-500'
+
+    case 'creating':
+
+    case 'restarting':
+
+    case 'starting':
+
+    case 'stopping':
+      return 'bg-amber-500'
+
+    case 'error':
+      return 'bg-red-500'
+
+    default:
+      return 'bg-(--ui-text-quaternary)'
+  }
+}
+
+function OrgoComputerPicker({
+  computers,
+  emptyMessage,
+  formatMatches,
+  listLabel,
+  onSelect,
+  scopeHint,
+  searchPlaceholder,
+  selectedComputerId,
+  summary,
+  workspaces
+}: OrgoComputerPickerProps) {
+  const [search, setSearch] = useState('')
+
+  const groups = useMemo(() => {
+    const query = search.trim().toLowerCase()
+
+    return [...workspaces]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map(workspace => {
+        const workspaceMatch = workspace.name.toLowerCase().includes(query)
+
+        const available = computers
+          .filter(computer => computer.workspaceId === workspace.id)
+          .filter(computer => !query || workspaceMatch || computer.name.toLowerCase().includes(query))
+          .sort((left, right) => left.name.localeCompare(right.name))
+
+        return { available, workspace }
+      })
+      .filter(group => !query || group.workspace.name.toLowerCase().includes(query) || group.available.length > 0)
+  }, [computers, search, workspaces])
+
+  const resultCount = groups.reduce((count, group) => count + group.available.length, 0)
+
+  return (
+    <section className="overflow-hidden rounded-md border border-(--ui-stroke-secondary) bg-(--ui-bg-secondary)">
+      <div className="grid gap-1.5 border-b border-(--ui-stroke-tertiary) p-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[0.68rem] font-medium text-(--ui-text-secondary)">{summary}</p>
+          {search ? (
+            <span className="text-[0.62rem] text-(--ui-text-quaternary)">{formatMatches(resultCount)}</span>
+          ) : null}
+        </div>
+        <Input
+          aria-label={searchPlaceholder}
+          onChange={event => setSearch(event.target.value)}
+          placeholder={searchPlaceholder}
+          value={search}
+        />
+        <p className="text-[0.61rem] leading-3.5 text-(--ui-text-quaternary)">{scopeHint}</p>
+      </div>
+
+      <div aria-label={listLabel} className="max-h-64 overflow-y-auto p-1.5" role="list">
+        {groups.length > 0 ? (
+          groups.map(({ available, workspace }) => (
+            <div className="py-1" key={workspace.id} role="listitem">
+              <div className="flex items-center justify-between gap-2 px-2 pb-1 pt-0.5">
+                <p className="truncate text-[0.62rem] font-medium uppercase tracking-wide text-(--ui-text-quaternary)">
+                  {workspace.name}
+                </p>
+                <span className="shrink-0 text-[0.6rem] text-(--ui-text-quaternary)">{available.length}</span>
+              </div>
+              {available.length > 0 ? (
+                <div className="grid gap-0.5">
+                  {available.map(computer => {
+                    const selected = computer.id === selectedComputerId
+                    const status = computerStatusLabel(computer.status)
+
+                    return (
+                      <button
+                        aria-label={`${computer.name}, ${status}, ${workspace.name}`}
+                        aria-pressed={selected}
+                        className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-(--ui-focus-border) ${
+                          selected
+                            ? 'bg-(--ui-selection-background) text-(--ui-selection-foreground)'
+                            : 'text-(--ui-text-secondary) hover:bg-(--ui-hover-background)'
+                        }`}
+                        key={computer.id}
+                        onClick={() => onSelect(computer)}
+                        type="button"
+                      >
+                        <span className={`size-1.5 shrink-0 rounded-full ${computerStatusTone(computer.status)}`} />
+                        <span className="min-w-0 flex-1 truncate text-[0.68rem] font-medium">{computer.name}</span>
+                        <span className="shrink-0 text-[0.61rem] opacity-70">{status}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <p className="px-2 py-1 text-[0.62rem] text-(--ui-text-quaternary)">{emptyMessage}</p>
+              )}
+            </div>
+          ))
+        ) : (
+          <p className="px-2 py-4 text-center text-[0.65rem] text-(--ui-text-quaternary)">{emptyMessage}</p>
+        )}
+      </div>
+    </section>
+  )
+}
+
 /** The remote desktop's panel bar, in framebuffer pixels. The preview crops
  *  exactly this much off the top: it is chrome, and it reads as a grey seam
  *  against the card. Measured in PIXELS rather than as a fraction because the
@@ -76,14 +221,25 @@ export function OrgoDesktopPane() {
   const copy = t.rightSidebar.desktop
   const visible = useStore($orgoDesktopOpen)
   const activeProfile = normalizeProfileKey(useStore($activeGatewayProfile))
+  // Some embedded/test hosts hydrate this shared atom after the pane mounts.
+  // The active profile still makes a complete one-option selector meanwhile.
+  const profiles = useStore($profiles) || []
   const desktopFrameRef = useRef<HTMLDivElement>(null)
   const desktopSlotRef = useRef<HTMLDivElement>(null)
   const screenRef = useRef<HTMLDivElement>(null)
   const rfbRef = useRef<RFB | null>(null)
   const generationRef = useRef(0)
+  const discoveryGenerationRef = useRef(0)
+  const settingsProfileTargetRef = useRef<string | null>(null)
   const [config, setConfig] = useState<DesktopOrgoConfig | null>(null)
+  const [workspaceId, setWorkspaceId] = useState('')
   const [computerId, setComputerId] = useState('')
   const [apiKey, setApiKey] = useState('')
+  const [workspaces, setWorkspaces] = useState<DesktopOrgoWorkspace[]>([])
+  const [computers, setComputers] = useState<DesktopOrgoComputer[]>([])
+  const [inventoryLoaded, setInventoryLoaded] = useState(false)
+  const [discovering, setDiscovering] = useState(false)
+  const [switchingAgent, setSwitchingAgent] = useState(false)
   const [view, setView] = useState<RailView>('details')
   const [routine, setRoutine] = useState<CronJob | null>(null)
   const [routinesRevision, setRoutinesRevision] = useState(0)
@@ -238,26 +394,61 @@ export function OrgoDesktopPane() {
         setError(copy.disconnectedUnexpectedly)
       }
     })
-  }, [activeProfile, copy.connectionFailed, copy.disconnectedUnexpectedly, copy.securityFailure, measureScreenAspect, viewOnly])
+  }, [
+    activeProfile,
+    copy.connectionFailed,
+    copy.disconnectedUnexpectedly,
+    copy.securityFailure,
+    measureScreenAspect,
+    viewOnly
+  ])
 
   useEffect(() => {
     let cancelled = false
+    const keepSettingsOpen = settingsProfileTargetRef.current === activeProfile
 
     disconnect()
     setConfig(null)
+    setWorkspaceId('')
+    setWorkspaces([])
+    setComputers([])
+    setInventoryLoaded(false)
+    setDiscovering(false)
     setDesktopName('')
     setScreenSize(null)
     setError('')
-    setView('details')
+    setView(keepSettingsOpen ? 'settings' : 'details')
 
-    void window.hermesDesktop.orgoDesktop.getConfig(activeProfile).then(next => {
+    void window.hermesDesktop.orgoDesktop.getConfig(activeProfile).then(async next => {
       if (cancelled) {
         return
       }
 
       setConfig(next)
+      setWorkspaceId(next.workspaceId || '')
       setComputerId(next.computerId)
-      setView(next.configured ? 'details' : 'settings')
+      setView(keepSettingsOpen || !next.configured ? 'settings' : 'details')
+
+      if (!next.apiKeySet) {
+        return
+      }
+
+      try {
+        const inventory = await window.hermesDesktop.orgoDesktop.listInventory({ profile: activeProfile })
+
+        if (cancelled) {
+          return
+        }
+
+        const selectedComputer = inventory.computers.find(computer => computer.id === next.computerId)
+        setWorkspaces(inventory.workspaces)
+        setComputers(inventory.computers)
+        setInventoryLoaded(true)
+        setWorkspaceId(next.workspaceId || selectedComputer?.workspaceId || '')
+      } catch {
+        // Discovery is recoverable from Settings and must not take down an
+        // already-connected screen.
+      }
     })
 
     return () => {
@@ -265,6 +456,12 @@ export function OrgoDesktopPane() {
       disconnect()
     }
   }, [activeProfile, disconnect])
+
+  useEffect(() => {
+    if (visible && view === 'settings') {
+      void refreshProfiles().catch(() => undefined)
+    }
+  }, [view, visible])
 
   useEffect(() => {
     if (visible && config?.configured && state === 'disconnected') {
@@ -338,12 +535,14 @@ export function OrgoDesktopPane() {
       const next = await window.hermesDesktop.orgoDesktop.saveConfig({
         apiKey,
         computerId,
+        workspaceId,
         profile: activeProfile
       })
 
       setConfig(next)
       setComputerId(next.computerId)
       setApiKey('')
+      settingsProfileTargetRef.current = null
       setView('details')
       disconnect()
       await connect()
@@ -351,6 +550,102 @@ export function OrgoDesktopPane() {
       setError(saveError instanceof Error ? saveError.message : String(saveError))
     } finally {
       setSaving(false)
+    }
+  }
+
+  const discoverWorkspaces = async () => {
+    const discoveryGeneration = discoveryGenerationRef.current + 1
+    discoveryGenerationRef.current = discoveryGeneration
+    setDiscovering(true)
+    setError('')
+
+    try {
+      const inventory = await window.hermesDesktop.orgoDesktop.listInventory({
+        apiKey: apiKey.trim() || undefined,
+        profile: activeProfile
+      })
+
+      if (
+        discoveryGeneration !== discoveryGenerationRef.current ||
+        activeProfile !== normalizeProfileKey($activeGatewayProfile.get())
+      ) {
+        return
+      }
+
+      setWorkspaces(inventory.workspaces)
+      setComputers(inventory.computers)
+      setInventoryLoaded(true)
+
+      if (computerId && !inventory.computers.some(computer => computer.id === computerId)) {
+        setWorkspaceId('')
+        setComputerId('')
+      }
+    } catch (discoveryError) {
+      if (
+        discoveryGeneration === discoveryGenerationRef.current &&
+        activeProfile === normalizeProfileKey($activeGatewayProfile.get())
+      ) {
+        setError(discoveryError instanceof Error ? discoveryError.message : String(discoveryError))
+      }
+    } finally {
+      if (
+        discoveryGeneration === discoveryGenerationRef.current &&
+        activeProfile === normalizeProfileKey($activeGatewayProfile.get())
+      ) {
+        setDiscovering(false)
+      }
+    }
+  }
+
+  const selectComputer = (computer: DesktopOrgoComputer) => {
+    setComputerId(computer.id)
+    setWorkspaceId(computer.workspaceId || '')
+  }
+
+  const clearProfileBinding = async () => {
+    setSaving(true)
+    setError('')
+
+    try {
+      const next = await window.hermesDesktop.orgoDesktop.clearConfig(activeProfile)
+      setConfig(next)
+      setWorkspaceId(next.workspaceId || '')
+      setComputerId(next.computerId)
+      setApiKey('')
+      settingsProfileTargetRef.current = null
+      setView(next.configured ? 'details' : 'settings')
+      disconnect()
+
+      if (next.configured) {
+        await connect()
+      }
+    } catch (clearError) {
+      setError(clearError instanceof Error ? clearError.message : String(clearError))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const selectAgent = async (profile: string) => {
+    const target = normalizeProfileKey(profile)
+
+    if (target === activeProfile) {
+      return
+    }
+
+    discoveryGenerationRef.current += 1
+    settingsProfileTargetRef.current = target
+    setSwitchingAgent(true)
+    setError('')
+    disconnect()
+
+    try {
+      await ensureGatewayProfile(target)
+    } catch (switchError) {
+      settingsProfileTargetRef.current = null
+      setError(switchError instanceof Error ? switchError.message : String(switchError))
+    } finally {
+      setSwitchingAgent(false)
     }
   }
 
@@ -380,7 +675,6 @@ export function OrgoDesktopPane() {
       rfbRef.current?.focus({ preventScroll: true })
     }
   }
-
 
   // A machine can change resolution while we are watching it — xrandr on the
   // remote box, or a session that renegotiates. Sampling once at connect left
@@ -425,6 +719,10 @@ export function OrgoDesktopPane() {
   }, [settingsRequested])
 
   const label = agentLabel(activeProfile, desktopName)
+
+  const profileOptions = Array.from(
+    new Set([activeProfile, ...profiles.map(profile => normalizeProfileKey(profile.name))])
+  ).sort((left, right) => left.localeCompare(right))
 
   const desktopSurface = (
     <div
@@ -554,7 +852,6 @@ export function OrgoDesktopPane() {
 
           <div className="relative flex h-8 items-center justify-center px-7 pt-0.5">
             <p className="truncate text-center text-[0.68rem] text-(--ui-text-tertiary)">{label}&apos;s screen</p>
-
           </div>
         </section>
 
@@ -570,7 +867,13 @@ export function OrgoDesktopPane() {
 
       {view === 'settings' ? (
         <div className="absolute inset-0 flex min-h-0 flex-col">
-          <RailHeader onBack={() => config?.configured && setView('details')} title="Computer" />
+          <RailHeader
+            onBack={() => {
+              settingsProfileTargetRef.current = null
+              setView('details')
+            }}
+            title="Computer"
+          />
           <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
             <form
               className="grid gap-5 pt-3"
@@ -619,26 +922,75 @@ export function OrgoDesktopPane() {
                   <p className="text-[0.64rem] leading-4 text-(--ui-text-quaternary)">{copy.setupDescription}</p>
                 </div>
                 <label className="grid gap-1.5 text-[0.68rem] text-(--ui-text-secondary)">
-                  {copy.computerId}
-                  <Input
-                    autoFocus={!config?.configured}
-                    onChange={event => setComputerId(event.target.value)}
-                    placeholder={copy.computerIdPlaceholder}
-                    value={computerId}
+                  {copy.agent}
+                  <SearchableSelect
+                    ariaLabel={copy.agent}
+                    emptyMessage={copy.noAgents}
+                    onChange={value => void selectAgent(value)}
+                    options={profileOptions}
+                    placeholder={copy.agentPlaceholder}
+                    value={activeProfile}
                   />
                 </label>
+                <p className="text-[0.64rem] leading-4 text-(--ui-text-quaternary)">
+                  {switchingAgent ? copy.switchingAgent : copy.agentIsolation}
+                </p>
                 <label className="grid gap-1.5 text-[0.68rem] text-(--ui-text-secondary)">
                   {copy.apiKey}
                   <Input
+                    autoFocus={!config?.apiKeySet}
                     onChange={event => setApiKey(event.target.value)}
                     placeholder={config?.apiKeySet ? copy.apiKeyStored : copy.apiKeyPlaceholder}
                     type="password"
                     value={apiKey}
                   />
                 </label>
+                <Button
+                  disabled={discovering || (!config?.apiKeySet && !apiKey.trim())}
+                  onClick={() => void discoverWorkspaces()}
+                  size="xs"
+                  type="button"
+                  variant="secondary"
+                >
+                  {discovering ? copy.loadingInventory : inventoryLoaded ? copy.refreshInventory : copy.loadInventory}
+                </Button>
+
+                {inventoryLoaded ? (
+                  <OrgoComputerPicker
+                    computers={computers}
+                    emptyMessage={copy.noComputers}
+                    formatMatches={copy.inventoryMatches}
+                    key={activeProfile}
+                    listLabel={copy.inventoryListLabel}
+                    onSelect={selectComputer}
+                    scopeHint={copy.inventoryScopeHint}
+                    searchPlaceholder={copy.searchInventory}
+                    selectedComputerId={computerId}
+                    summary={copy.inventorySummary(workspaces.length, computers.length)}
+                    workspaces={workspaces}
+                  />
+                ) : null}
+
+                {config?.inheritedFromDefault ? (
+                  <p className="text-[0.64rem] leading-4 text-(--ui-text-quaternary)">
+                    {copy.sharedComputer(activeProfile)}
+                  </p>
+                ) : activeProfile !== 'default' && config?.configured ? (
+                  <Button
+                    disabled={saving}
+                    onClick={() => void clearProfileBinding()}
+                    size="inline"
+                    type="button"
+                    variant="text"
+                  >
+                    {copy.useSharedComputer}
+                  </Button>
+                ) : null}
                 {error ? <p className="text-[0.68rem] leading-4 text-destructive">{error}</p> : null}
                 <Button
-                  disabled={saving || !computerId.trim() || (!config?.apiKeySet && !apiKey.trim())}
+                  disabled={
+                    saving || discovering || !workspaceId || !computerId || (!config?.apiKeySet && !apiKey.trim())
+                  }
                   size="sm"
                   type="submit"
                 >

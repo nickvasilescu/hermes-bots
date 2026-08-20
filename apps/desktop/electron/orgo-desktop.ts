@@ -20,6 +20,10 @@ export interface ResolvedOrgoDesktopProfile<T> {
   inheritedFromDefault: boolean
 }
 
+export interface ResolvedOrgoDesktopProfileBinding<T> extends ResolvedOrgoDesktopProfile<T> {
+  profile: string
+}
+
 export type OrgoDesktopErrorCode =
   'auth-failed' | 'computer-not-found' | 'invalid-config' | 'invalid-response' | 'network' | 'unavailable'
 
@@ -74,6 +78,16 @@ export function resolveOrgoDesktopProfile<T>(
   const fallback = profile === 'default' ? undefined : profiles.default
 
   return { entry: fallback, inheritedFromDefault: Boolean(fallback) }
+}
+
+/** Resolve a roster in one pass so synchronization cannot accidentally pin
+ * every agent to the default computer. Named profiles retain the legacy
+ * fallback only when they do not have an explicit binding of their own. */
+export function resolveOrgoDesktopProfiles<T>(
+  profiles: Record<string, T>,
+  names: string[]
+): Array<ResolvedOrgoDesktopProfileBinding<T>> {
+  return names.map(profile => ({ profile, ...resolveOrgoDesktopProfile(profiles, profile) }))
 }
 
 export function normalizeOrgoComputerId(value: unknown): string {

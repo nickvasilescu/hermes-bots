@@ -21,6 +21,7 @@ import {
   findOrCreateOrgoWorkspace,
   findOrCreateSharedHermesComputer,
   listOrgoComputers,
+  listOrgoInventory,
   listOrgoWorkspaces,
   ORGO_AGENT_MCP_REMOTE_PATH,
   ORGO_AGENT_MCP_SERVER_NAME,
@@ -229,6 +230,56 @@ test('lists workspaces and computers without exposing the key in parsed results'
   assert.equal(computers[0]?.id, COMPUTER_ID)
   assert.equal(JSON.stringify(computers).includes('orgo-secret'), false)
   assert.equal(calls.some(url => url.includes('/computers')), false)
+})
+
+test('lists the full authorized Orgo inventory and backfills computer workspace IDs', async () => {
+  const secondWorkspaceId = 'ws-client'
+  const secondComputerId = '60fe709b-1837-476c-87c0-12e74575c94b'
+  const calls: string[] = []
+
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url = String(input)
+    calls.push(url)
+
+    if (url.endsWith('/workspaces')) {
+      return json({
+        workspaces: [
+          {
+            id: WORKSPACE_ID,
+            name: 'Shared',
+            computers: [{ id: COMPUTER_ID, name: 'Operations', status: 'running' }]
+          },
+          { id: secondWorkspaceId, name: 'Client' }
+        ]
+      })
+    }
+
+    if (url.endsWith(`/workspaces/${secondWorkspaceId}`)) {
+      return json({
+        id: secondWorkspaceId,
+        name: 'Client',
+        computers: [{ id: secondComputerId, name: 'Research', status: 'stopped' }]
+      })
+    }
+
+    return json({}, 404)
+  }) as typeof fetch
+
+  const inventory = await listOrgoInventory('orgo-secret', fetchImpl)
+
+  assert.deepEqual(inventory.workspaces.map(workspace => workspace.name), ['Shared', 'Client'])
+  assert.deepEqual(
+    inventory.computers.map(computer => [computer.name, computer.workspaceId]),
+    [
+      ['Research', secondWorkspaceId],
+      ['Operations', WORKSPACE_ID]
+    ]
+  )
+  assert.deepEqual(calls, [
+    'https://www.orgo.ai/api/workspaces',
+    `https://www.orgo.ai/api/workspaces/${secondWorkspaceId}`
+  ])
+  assert.equal(JSON.stringify(inventory).includes('orgo-secret'), false)
 })
 
 test('reuses dedicated Korgo Bot and legacy Hermes Bots workspaces', () => {
