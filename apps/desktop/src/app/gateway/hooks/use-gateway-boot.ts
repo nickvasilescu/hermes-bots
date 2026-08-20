@@ -1,10 +1,11 @@
-import { isGatewayReauthRequired, resolveGatewayWsUrl } from '@hermes/shared'
+import { isGatewayReauthRequired } from '@hermes/shared'
 import { useEffect, useRef } from 'react'
 
 import type { HermesConnection } from '@/global'
 import { HermesGateway } from '@/hermes'
 import { translateNow } from '@/i18n'
 import { desktopDefaultCwd } from '@/lib/desktop-fs'
+import { resolveGatewayClientTarget } from '@/lib/native-gateway-socket'
 import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
 import {
   $desktopBoot,
@@ -176,8 +177,11 @@ export function useGatewayBoot({
         // explicit auth rejection asks for sign-in; transport failures stay in
         // this reconnect loop. For local/token gateways the URL carries a
         // long-lived token and the re-mint is a cheap no-op.
-        const wsUrl = await resolveGatewayWsUrl(desktop, conn)
-        await gateway.connect(wsUrl)
+        const transport = await resolveGatewayClientTarget(desktop, conn, {
+          profile: $activeGatewayProfile.get(),
+          purpose: 'gateway'
+        })
+        await gateway.connect(transport)
 
         if (cancelled) {
           return
@@ -317,8 +321,11 @@ export function useGatewayBoot({
         }
 
         publish(conn)
-        const wsUrl = await resolveGatewayWsUrl(desktop, conn)
-        await gateway.connect(wsUrl)
+        const transport = await resolveGatewayClientTarget(desktop, conn, {
+          profile: windowProfileOverride() ?? conn.profile ?? null,
+          purpose: 'gateway'
+        })
+        await gateway.connect(transport)
 
         if (cancelled) {
           return
@@ -534,8 +541,11 @@ export function useGatewayBoot({
         // conn.wsUrl is stale; resolveGatewayWsUrl() re-mints it rather than
         // connecting with a dead ticket. Auth rejection asks for sign-in;
         // connectivity failures remain retryable.
-        const wsUrl = await resolveGatewayWsUrl(desktop, conn)
-        await gateway.connect(wsUrl)
+        const transport = await resolveGatewayClientTarget(desktop, conn, {
+          profile: conn.profile ?? null,
+          purpose: 'gateway'
+        })
+        await gateway.connect(transport)
 
         if (cancelled) {
           return

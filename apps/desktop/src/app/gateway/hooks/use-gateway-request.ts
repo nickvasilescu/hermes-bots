@@ -1,8 +1,9 @@
-import { isGatewayReauthRequired, resolveGatewayWsUrl } from '@hermes/shared'
+import { isGatewayReauthRequired } from '@hermes/shared'
 import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useRef } from 'react'
 
 import type { HermesGateway } from '@/hermes'
+import { resolveGatewayClientTarget } from '@/lib/native-gateway-socket'
 import { $gateway, ensureActiveGatewayOpen, isActivePrimary } from '@/store/gateway'
 import { $activeGatewayProfile } from '@/store/profile'
 import { $gatewayState, setConnection } from '@/store/session'
@@ -82,8 +83,11 @@ export function useGatewayRequest() {
         // auth rejection becomes a reauth error; transport failures remain
         // retryable. Stash only the former so requestGateway can show the
         // actionable "sign in again" message.
-        const wsUrl = await resolveGatewayWsUrl(desktop, conn)
-        await existing.connect(wsUrl)
+        const transport = await resolveGatewayClientTarget(desktop, conn, {
+          profile: $activeGatewayProfile.get(),
+          purpose: 'gateway'
+        })
+        await existing.connect(transport)
 
         return existing
       } catch (error) {

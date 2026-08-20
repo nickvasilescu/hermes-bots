@@ -1,6 +1,7 @@
-import { JsonRpcGatewayClient, resolveGatewayWsUrl } from '@hermes/shared'
+import { JsonRpcGatewayClient } from '@hermes/shared'
 
 import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
+import { openAuxiliaryGatewaySocket } from '@/lib/native-gateway-socket'
 import type {
   ActionResponse,
   ActionStatusResponse,
@@ -331,20 +332,11 @@ export function pluginSocket(pluginId: string, path: string, onMessage: (data: u
       return
     }
 
-    const gatewayUrl = new URL(await resolveGatewayWsUrl(window.hermesDesktop, connection))
-
-    if (!gatewayUrl.pathname.endsWith('/api/ws')) {
-      return
-    }
-
-    const suffixUrl = new URL(suffix, 'http://plugin.invalid')
-    gatewayUrl.pathname = gatewayUrl.pathname.replace(
-      /\/api\/ws$/,
-      `/api/plugins/${encodeURIComponent(pluginId)}${suffixUrl.pathname}`
-    )
-    suffixUrl.searchParams.forEach((value, name) => gatewayUrl.searchParams.set(name, value))
-    gatewayUrl.hash = ''
-    socket = new WebSocket(gatewayUrl.toString())
+    socket = await openAuxiliaryGatewaySocket(window.hermesDesktop, connection, {
+      path: `/api/plugins/${encodeURIComponent(pluginId)}${suffix}`,
+      profile: connection.profile ?? null,
+      purpose: 'plugin'
+    })
 
     socket.onmessage = event => {
       attempt = 0
